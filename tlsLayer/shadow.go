@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 
 	"github.com/e1732a364fed/v2ray_simple/netLayer"
 	"github.com/e1732a364fed/v2ray_simple/utils"
 	"go.uber.org/zap"
 )
+
+//https://www.ihcblog.com/a-better-tls-obfs-proxy/
+//https://github.com/ihciah/shadow-tls/blob/master/docs/protocol-cn.md
 
 func getShadowTlsPasswordFromExtra(extra map[string]any) string {
 	if len(extra) > 0 {
@@ -38,29 +40,29 @@ func shadowTls1(servername string, clientConn net.Conn) (tlsConn *Conn, err erro
 		ce.Write()
 	}
 
-	var wg sync.WaitGroup
 	var e1, e2 error
-	wg.Add(2)
+
+	finish1 := make(chan struct{})
 	go func() {
 		e1 = CopyTls12Handshake(true, fakeConn, clientConn)
-		wg.Done()
 
 		if ce := utils.CanLogDebug("shadowTls copy client end"); ce != nil {
 			ce.Write(zap.Error(e1))
 		}
-	}()
-	go func() {
-		e2 = CopyTls12Handshake(false, clientConn, fakeConn)
-		wg.Done()
 
-		if ce := utils.CanLogDebug("shadowTls copy server end"); ce != nil {
-			ce.Write(
-				zap.Error(e2),
-			)
-		}
+		close(finish1)
+
 	}()
 
-	wg.Wait()
+	e2 = CopyTls12Handshake(false, clientConn, fakeConn)
+
+	if ce := utils.CanLogDebug("shadowTls copy server end"); ce != nil {
+		ce.Write(
+			zap.Error(e2),
+		)
+	}
+
+	<-finish1
 
 	if e1 != nil || e2 != nil {
 		e := utils.Errs{}
@@ -143,13 +145,16 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 		if ce := utils.CanLogDebug("shadowTls2 copy "); ce != nil {
 			ce.Write(zap.Int("step", step))
 		}
+
 		netLayer.SetCommonReadTimeout(clientConn)
 
 		_, err := io.ReadFull(clientConn, header[:])
+
+		netLayer.PersistConn(clientConn)
+
 		if err != nil {
 			return nil, utils.ErrInErr{ErrDetail: err, ErrDesc: "shadowTls2, io.ReadFull err"}
 		}
-		netLayer.PersistConn(clientConn)
 
 		contentType := header[0]
 
@@ -164,7 +169,12 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 		if contentType == 23 {
 			buf := utils.GetBuf()
 
+			netLayer.SetCommonReadTimeout(clientConn)
+
 			_, err = io.Copy(buf, io.LimitReader(clientConn, int64(length)))
+
+			netLayer.PersistRead(clientConn)
+
 			if err != nil {
 				utils.PutBuf(buf)
 				return nil, utils.ErrInErr{ErrDetail: err, ErrDesc: "shadowTls2, copy err1"}
@@ -188,8 +198,13 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 				}
 			}
 
+			netLayer.SetCommonWriteTimeout(fakeConn)
+
 			_, err = io.Copy(fakeConn, io.MultiReader(bytes.NewReader(header[:]), buf))
 			utils.PutBuf(buf)
+
+			netLayer.PersistWrite(fakeConn)
+
 			if err != nil {
 				return nil, utils.ErrInErr{ErrDetail: err, ErrDesc: "shadowTls2, copy err2"}
 			}
@@ -197,10 +212,13 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 		} else {
 
 			netLayer.SetCommonReadTimeout(clientConn)
+			netLayer.SetCommonWriteTimeout(fakeConn)
 
 			_, err = io.Copy(fakeConn, io.MultiReader(bytes.NewReader(header[:]), io.LimitReader(clientConn, int64(length))))
 
-			netLayer.PersistConn(clientConn)
+			netLayer.PersistRead(clientConn)
+			netLayer.PersistWrite(fakeConn)
+
 			if err != nil {
 				return nil, utils.ErrInErr{ErrDetail: err, ErrDesc: "shadowTls2, copy err3"}
 			}
@@ -211,6 +229,11 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 			return nil, utils.ErrFailed
 		}
 		step++
+
+		if step > 8 {
+			return nil, errors.New("shit, shadowTls2 copy loop > 8, maybe under attack")
+
+		}
 	}
 
 }

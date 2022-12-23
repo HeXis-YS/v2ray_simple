@@ -40,6 +40,9 @@ var (
 var (
 	fallback_h2c_transport = &http2.Transport{
 		DialTLS: func(n, a string, cfg *tls.Config) (net.Conn, error) {
+			// if ce := utils.CanLogDebug("fallback_h2c_transport, got dial"); ce != nil {
+			// 	ce.Write(zap.String("a", n))
+			// }
 			return net.Dial(n, a)
 		},
 		AllowHTTP: true,
@@ -396,6 +399,7 @@ func handleNewIncomeConnection(inServer proxy.Server, defaultClientForThis proxy
 				newiics.wrappedConn = fallbackMeta.Conn
 				newiics.isFallbackH2 = fallbackMeta.IsH2
 				newiics.fallbackH2Request = fallbackMeta.H2Request
+				newiics.fallbackRW = fallbackMeta.H2RW
 
 				passToOutClient(newiics, true, nil, nil, netLayer.Addr{})
 			})
@@ -657,16 +661,45 @@ func passToOutClient(iics incomingInserverConnState, isfallback bool, wlc net.Co
 				//h2 的fallback 非常特殊，要单独处理. 下面进行h2c拨号并向真实h2c服务器发起请求。
 
 				rq := iics.fallbackH2Request
-				rq.Host = targetAddr.Name
 
-				urlStr := "https://" + targetAddr.String() + iics.fallbackRequestPath
-				url, _ := url.Parse(urlStr)
-				rq.URL = url
+				if targetAddr.Network != "unix" {
+					rq.Host = targetAddr.Name
+
+					u, _ := url.Parse("https://" + targetAddr.String() + iics.fallbackRequestPath)
+					rq.URL = u
+
+				} else {
+					//rq.Host = "" //如果host设成了 unix的地址，依然无法被nginx正常响应
+
+					rq.URL, _ = url.Parse("http://127.0.0.1" + iics.fallbackRequestPath)
+
+				}
 
 				var transport *http2.Transport
 
+				newUdsTransport := func(doAfterDial func(conn net.Conn)) *http2.Transport {
+					return &http2.Transport{
+						DialTLS: func(n, a string, cfg *tls.Config) (net.Conn, error) {
+
+							//实测如果是uds，这里的a会为 :443, 丢失了uds监听文件信息
+
+							c, e := net.Dial("unix", targetAddr.String())
+							if doAfterDial != nil {
+								doAfterDial(c)
+							}
+							return c, e
+						},
+						AllowHTTP: true,
+					}
+				}
+
 				if fbResult == 0 {
 					transport = fallback_h2c_transport
+
+					if targetAddr.Network == "unix" {
+						transport = newUdsTransport(nil)
+
+					}
 
 				} else if fbResult > 0 {
 					var wlcRaddrStr string
@@ -686,13 +719,21 @@ func passToOutClient(iics incomingInserverConnState, isfallback bool, wlc net.Co
 					// 因为 PROXYprotocol 头部对于每个wlc都是不同的, 所以才用到多个transport和map这种办法。
 
 					if transport == nil {
-						transport = &http2.Transport{
-							DialTLS: func(n, a string, cfg *tls.Config) (net.Conn, error) {
-								conn, e := net.Dial(n, a)
+						if targetAddr.Network == "unix" {
+							transport = newUdsTransport(func(conn net.Conn) {
 								netLayer.WritePROXYprotocol(fbResult, wlc, conn)
-								return conn, e
-							},
-							AllowHTTP: true,
+
+							})
+
+						} else {
+							transport = &http2.Transport{
+								DialTLS: func(n, a string, cfg *tls.Config) (net.Conn, error) {
+									conn, e := net.Dial(n, a)
+									netLayer.WritePROXYprotocol(fbResult, wlc, conn)
+									return conn, e
+								},
+								AllowHTTP: true,
+							}
 						}
 
 						if wlcRaddrStr != "" {
@@ -711,11 +752,20 @@ func passToOutClient(iics incomingInserverConnState, isfallback bool, wlc net.Co
 
 				if err != nil {
 					if ce := iics.CanLogErr("Failed in fallback h2 RoundTrip"); ce != nil {
-						ce.Write(zap.Error(err), zap.String("url", urlStr))
+						ce.Write(
+							zap.Error(err),
+							zap.String("real addr", targetAddr.UrlString()),
+						)
 					}
 
 					return
 				}
+
+				for k, v := range rsp.Header {
+					iics.fallbackRW.Header().Set(k, v[0])
+				}
+
+				iics.fallbackRW.WriteHeader(rsp.StatusCode)
 
 				netLayer.TryCopy(wlc, rsp.Body, iics.id)
 
