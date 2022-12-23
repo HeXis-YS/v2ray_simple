@@ -25,14 +25,14 @@ func NewServer(conf Conf) (*Server, error) {
 	//而且我们如果不提供 h1 和 h2 的alpn的话，很容易被审查者察觉的。
 
 	if conf.AlpnList == nil {
-		conf.AlpnList = []string{"http/1.1", "h2"}
+		conf.AlpnList = []string{"h2", "http/1.1"}
 	} else {
 
-		if !slices.Contains(conf.AlpnList, "http/1.1") {
-			conf.AlpnList = append(conf.AlpnList, "http/1.1")
-		}
 		if !slices.Contains(conf.AlpnList, "h2") {
 			conf.AlpnList = append(conf.AlpnList, "h2")
+		}
+		if !slices.Contains(conf.AlpnList, "http/1.1") {
+			conf.AlpnList = append(conf.AlpnList, "http/1.1")
 		}
 	}
 
