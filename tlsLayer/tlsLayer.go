@@ -1,5 +1,5 @@
 /*
-Package tlsLayer provides facilities for tls, including uTls, sniffing and random certificate.
+Package tlsLayer provides facilities for tls, including uTls,shadowTls, sniffing and random certificate.
 
 Sniffing can be a part of Tls Lazy Encrypt tech.
 */
@@ -53,6 +53,10 @@ type Conf struct {
 	CipherSuites     []uint16
 
 	Extra map[string]any //用于shadowTls
+}
+
+func (tConf Conf) IsShadowTls() bool {
+	return tConf.Tls_type == ShadowTls2_t || tConf.Tls_type == ShadowTls_t
 }
 
 func GetTlsConfig(mustHasCert bool, conf Conf) *tls.Config {

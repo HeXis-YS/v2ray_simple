@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/e1732a364fed/v2ray_simple/machine"
 	httpProxy "github.com/e1732a364fed/v2ray_simple/proxy/http"
 	"github.com/e1732a364fed/v2ray_simple/tlsLayer"
 
@@ -22,69 +21,76 @@ import (
 //本文件下所有命令的输出统一使用 fmt 而不是 log
 
 var (
-	cmdPrintSupportedProtocols bool
-	cmdPrintVer                bool
-	cmdGenerateUUid            bool
-
-	cmdConvertQxToVs          string
-	cmdExtractQX_remoteServer string
-
 	download bool
 
-	defaultApiServerConf machine.ApiServerConf
+	//defaultApiServerConf machine.ApiServerConf
 
 	extra_preCommands []func()
+
+	exitCmds = []exitCmd{
+		{name: "sp", desc: "print supported protocols", f: printSupportedProtocols},
+		{name: "v", desc: "print the version string then exit", f: func() { printVersion_simple(os.Stdout) }},
+		{name: "gu", desc: "automatically generate a uuid for you", f: generateAndPrintUUID},
+		{name: "pifs", desc: "print all network interfaces", f: func() {
+			netLayer.PrintAllInterface(os.Stdout)
+		}},
+		{name: "cvqxtvs", isStr: true, desc: "if given, convert qx server config string to vs toml config", fs: convertQxToVs},
+		{name: "eqxrs", isStr: true, desc: "if given, automatically extract remote servers from quantumultX config for you", fs: extractQxRemoteServers},
+
+		// {name: "test", desc: "test func", f: func() {
+		// 	utils.InitLog("")
+		// 	dns := netLayer.GetSystemDNS()
+		// 	log.Println(len(dns), dns)
+		// }},
+	}
 )
 
-func init() {
-	flag.BoolVar(&download, "d", false, " automatically download required mmdb file")
+type exitCmd struct {
+	enable, defaultBoolValue, isStr          bool
+	name, desc, defaultStringValue, strValue string
+	f                                        func()
+	fs                                       func(string)
+}
 
-	flag.BoolVar(&cmdPrintSupportedProtocols, "sp", false, "print supported protocols")
-	flag.BoolVar(&cmdPrintVer, "v", false, "print the version string then exit")
-	flag.BoolVar(&cmdGenerateUUid, "gu", false, " automatically generate a uuid for you")
-	flag.StringVar(&cmdConvertQxToVs, "cvqxtvs", "", "if given, convert qx server config string to vs toml config")
-	flag.StringVar(&cmdExtractQX_remoteServer, "eqxrs", "", "if given, automatically extract remote servers from quantumultX config for you")
+func init() {
+	for i, ec := range exitCmds {
+		if ec.isStr {
+			flag.StringVar(&exitCmds[i].strValue, ec.name, ec.defaultStringValue, ec.desc)
+
+		} else {
+			flag.BoolVar(&exitCmds[i].enable, ec.name, ec.defaultBoolValue, ec.desc)
+
+		}
+	}
+
+	flag.BoolVar(&download, "d", false, " automatically download required mmdb file")
 
 	//apiServer stuff
 
-	flag.BoolVar(&defaultApiServerConf.PlainHttp, "sunsafe", false, "if given, api Server will use http instead of https")
-
-	flag.StringVar(&defaultApiServerConf.PathPrefix, "spp", "/api", "api Server Path Prefix, must start with '/' ")
-	flag.StringVar(&defaultApiServerConf.AdminPass, "sap", "", "api Server admin password, but won't be used if it's empty")
-	flag.StringVar(&defaultApiServerConf.Addr, "sa", "127.0.0.1:48345", "api Server listen address")
-	flag.StringVar(&defaultApiServerConf.CertFile, "scert", "", "api Server tls cert file path")
-	flag.StringVar(&defaultApiServerConf.KeyFile, "skey", "", "api Server tls cert key path")
-
+	//defaultApiServerConf.SetupFlags()
 }
 
 // 运行一些 执行后立即退出程序的 命令
 func runExitCommands() (atLeastOneCalled bool) {
-	if cmdPrintVer {
-		atLeastOneCalled = true
-		printVersion_simple(os.Stdout)
+	for _, ec := range exitCmds {
+		if ec.isStr {
+			if ec.strValue != "" {
+				if ec.fs != nil {
+					ec.fs(ec.strValue)
+					atLeastOneCalled = true
+				}
+			}
+		} else {
+			if ec.enable {
+				if ec.f != nil {
+					ec.f()
+					atLeastOneCalled = true
+				}
+			}
+		}
+
 	}
 
-	if cmdPrintSupportedProtocols {
-		atLeastOneCalled = true
-		printSupportedProtocols()
-	}
-	if cmdGenerateUUid {
-		atLeastOneCalled = true
-
-		generateAndPrintUUID()
-	}
-
-	if cmdConvertQxToVs != "" {
-		atLeastOneCalled = true
-
-		convertQxToVs()
-	}
-
-	if cmdExtractQX_remoteServer != "" {
-		atLeastOneCalled = true
-
-		extractQxRemoteServers()
-	}
 	return
 }
 

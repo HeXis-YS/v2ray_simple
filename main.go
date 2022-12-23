@@ -285,6 +285,7 @@ func handleNewIncomeConnection(inServer proxy.Server, defaultClientForThis proxy
 				if ce := iics.CanLogWarn("tls preread failed"); ce != nil {
 					ce.Write(zap.Error(e))
 				}
+				utils.PutPacket(bs)
 				wrappedConn.Close()
 				return
 			}
@@ -295,16 +296,18 @@ func handleNewIncomeConnection(inServer proxy.Server, defaultClientForThis proxy
 				if ce := iics.CanLogWarn("tls rejectUnknownSni, client didn't provide sni"); ce != nil {
 					ce.Write()
 				}
+				utils.PutPacket(bs)
 				wrappedConn.Close()
 				return
 			}
 
 			//shadowTls自己没有防御功能，完全靠我们包外过滤
-			if tConf.Tls_type == tlsLayer.ShadowTls2_t || tConf.Tls_type == tlsLayer.ShadowTls_t {
+			if tConf.IsShadowTls() {
 				if tlsSniff.SniffedServerName != tConf.Host {
 					if ce := iics.CanLogWarn("tls rejectUnknownSni, client sni not match"); ce != nil {
 						ce.Write(zap.String("sni", tlsSniff.SniffedServerName), zap.String("shouldBe", tConf.Host))
 					}
+					utils.PutPacket(bs)
 					wrappedConn.Close()
 					return
 				}
@@ -347,7 +350,7 @@ func handleNewIncomeConnection(inServer proxy.Server, defaultClientForThis proxy
 
 	if header := inServer.HasHeader(); header != nil {
 
-		//websocket 可以自行处理header, 不需要额外http包装
+		//高级层 均可以自行处理header, 不需要额外http包装
 		if !(advSer != nil && advSer.CanHandleHeaders()) {
 			var ho *heapObj = iics.heapObj
 
@@ -853,7 +856,7 @@ func passToOutClient(iics incomingInserverConnState, isfallback bool, wlc net.Co
 
 						if n <= 0 {
 
-							if ce := iics.CanLogErr("Failed in reading first payload, not because of timeout, will hung up"); ce != nil {
+							if ce := iics.CanLogWarn("Failed in reading first payload, not because of timeout, will hung up"); ce != nil {
 								ce.Write(
 									zap.String("target", targetAddr.String()),
 									zap.Error(err),
@@ -865,7 +868,7 @@ func passToOutClient(iics incomingInserverConnState, isfallback bool, wlc net.Co
 						}
 
 					} else {
-						if ce := iics.CanLogWarn("Read first payload but timeout, will relay without first payload."); ce != nil {
+						if ce := iics.CanLogInfo("Read first payload but timeout, will relay without first payload."); ce != nil {
 							ce.Write(
 								zap.String("target", targetAddr.String()),
 								zap.Error(err),

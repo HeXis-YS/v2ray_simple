@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/e1732a364fed/v2ray_simple"
-	"github.com/e1732a364fed/v2ray_simple/netLayer"
 	"github.com/e1732a364fed/v2ray_simple/proxy"
 	"github.com/e1732a364fed/v2ray_simple/utils"
 	"go.uber.org/zap"
@@ -111,14 +110,14 @@ func (m *M) HotDeleteServer(index int) {
 	m.listenCloserList = utils.TrimSlice(m.listenCloserList, index)
 }
 
-func (m *M) LoadSimpleConf(hot bool) (result int) {
+func (m *M) loadUrlConf(hot bool) (result int) {
 	var ser proxy.Server
-	result, ser = m.loadSimpleServer(m.simpleConf)
+	result, ser = m.loadUrlServer(m.urlConf)
 	if result < 0 {
 		return
 	}
 	var cli proxy.Client
-	result, cli = m.loadSimpleClient(m.simpleConf)
+	result, cli = m.loadUrlClient(m.urlConf)
 	if result < 0 {
 		return
 	}
@@ -138,9 +137,9 @@ func (m *M) LoadSimpleConf(hot bool) (result int) {
 }
 
 // load failed if result <0,
-func (m *M) loadSimpleServer(simpleConf proxy.SimpleConf) (result int, server proxy.Server) {
+func (m *M) loadUrlServer(urlConf proxy.UrlConf) (result int, server proxy.Server) {
 	var e error
-	server, e = proxy.ServerFromURL(simpleConf.ListenUrl)
+	server, e = proxy.ServerFromURL(urlConf.ListenUrl)
 	if e != nil {
 		if ce := utils.CanLogErr("can not create local server"); ce != nil {
 			ce.Write(zap.String("error", e.Error()))
@@ -151,23 +150,12 @@ func (m *M) loadSimpleServer(simpleConf proxy.SimpleConf) (result int, server pr
 
 	m.allServers = append(m.allServers, server)
 
-	if !server.CantRoute() && simpleConf.Route != nil {
-
-		netLayer.LoadMaxmindGeoipFile("")
-
-		//极简模式只支持通过 mycountry进行 geoip分流 这一种情况
-		m.RoutingEnv.RoutePolicy = netLayer.NewRoutePolicy()
-		if simpleConf.MyCountryISO_3166 != "" {
-			m.RoutingEnv.RoutePolicy.AddRouteSet(netLayer.NewRouteSetForMyCountry(simpleConf.MyCountryISO_3166))
-
-		}
-	}
 	return
 }
 
-func (m *M) loadSimpleClient(simpleConf proxy.SimpleConf) (result int, client proxy.Client) {
+func (m *M) loadUrlClient(urlConf proxy.UrlConf) (result int, client proxy.Client) {
 	var e error
-	client, e = proxy.ClientFromURL(simpleConf.DialUrl)
+	client, e = proxy.ClientFromURL(urlConf.DialUrl)
 	if e != nil {
 		if ce := utils.CanLogErr("can not create remote client"); ce != nil {
 			ce.Write(zap.String("error", e.Error()))

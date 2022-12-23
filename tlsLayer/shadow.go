@@ -65,9 +65,11 @@ func shadowTls1(servername string, clientConn net.Conn) (tlsConn *Conn, err erro
 	<-finish1
 
 	if e1 != nil || e2 != nil {
-		e := utils.Errs{}
-		e.Add(utils.ErrsItem{Index: 1, E: e1})
-		e.Add(utils.ErrsItem{Index: 2, E: e2})
+		e := utils.Errs{List: []utils.ErrsItem{
+			{Index: 1, E: e1},
+			{Index: 2, E: e2},
+		}}
+
 		return nil, e
 	}
 
@@ -141,6 +143,8 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 	step := 0
 	var applicationDataCount int
 
+	buf := utils.GetBuf()
+
 	for {
 		if ce := utils.CanLogDebug("shadowTls2 copy "); ce != nil {
 			ce.Write(zap.Int("step", step))
@@ -167,7 +171,6 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 		}
 
 		if contentType == 23 {
-			buf := utils.GetBuf()
 
 			netLayer.SetCommonReadTimeout(clientConn)
 
@@ -183,16 +186,16 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 			if hashW.Written() && length >= 8 {
 
 				checksum := hashW.Sum()
-				bs := buf.Bytes()
+				first8 := buf.Bytes()[:8]
 
 				if ce := utils.CanLogDebug("shadowTls2 check "); ce != nil {
 					ce.Write(zap.Int("step", step),
 						zap.String("checksum", fmt.Sprintf("%v", checksum)),
-						zap.String("real8", fmt.Sprintf("%v", bs[:8])),
+						zap.String("real8", fmt.Sprintf("%v", first8)),
 					)
 				}
 
-				if bytes.Equal(bs[:8], checksum) {
+				if bytes.Equal(first8, checksum) {
 					buf.Next(8)
 					return buf, nil
 				}
@@ -201,13 +204,16 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 			netLayer.SetCommonWriteTimeout(fakeConn)
 
 			_, err = io.Copy(fakeConn, io.MultiReader(bytes.NewReader(header[:]), buf))
-			utils.PutBuf(buf)
 
 			netLayer.PersistWrite(fakeConn)
 
 			if err != nil {
+				utils.PutBuf(buf)
 				return nil, utils.ErrInErr{ErrDetail: err, ErrDesc: "shadowTls2, copy err2"}
 			}
+
+			buf.Reset()
+
 			applicationDataCount++
 		} else {
 
@@ -231,7 +237,7 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 		step++
 
 		if step > 8 {
-			return nil, errors.New("shit, shadowTls2 copy loop > 8, maybe under attack")
+			return nil, errors.New("shadowTls2 copy loop > 8, maybe under attack")
 
 		}
 	}
