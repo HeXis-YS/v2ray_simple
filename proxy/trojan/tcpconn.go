@@ -41,18 +41,44 @@ func (c *UserTCPConn) Write(p []byte) (int, error) {
 	return c.Conn.Write(p)
 }
 
-func (c *UserTCPConn) EverPossibleToSplice() bool {
+// 当底层链接可以暴露为 tcp或 unix链接时，返回true
+func (c *UserTCPConn) EverPossibleToSpliceRead() bool {
+	if netLayer.IsTCP(c.Conn) != nil {
+		return true
+	}
+	if netLayer.IsUnix(c.Conn) != nil {
+		return true
+	}
+
+	if s, ok := c.Conn.(netLayer.SpliceReader); ok {
+		return s.EverPossibleToSpliceRead()
+	}
+
+	return false
+}
+
+func (c *UserTCPConn) CanSpliceRead() (bool, *net.TCPConn, *net.UnixConn) {
+	if c.isServerEnd {
+		if c.remainFirstBufLen > 0 {
+			return false, nil, nil
+		}
+	}
+
+	return netLayer.ReturnSpliceRead(c.Conn)
+}
+
+func (c *UserTCPConn) EverPossibleToSpliceWrite() bool {
 
 	if netLayer.IsTCP(c.Conn) != nil {
 		return true
 	}
 	if s, ok := c.Conn.(netLayer.Splicer); ok {
-		return s.EverPossibleToSplice()
+		return s.EverPossibleToSpliceWrite()
 	}
 	return false
 }
 
-func (c *UserTCPConn) CanSplice() (r bool, conn *net.TCPConn) {
+func (c *UserTCPConn) CanSpliceWrite() (r bool, conn *net.TCPConn) {
 	if !c.isServerEnd && c.remainFirstBufLen > 0 {
 		return false, nil
 	}
@@ -62,7 +88,7 @@ func (c *UserTCPConn) CanSplice() (r bool, conn *net.TCPConn) {
 		conn = tc
 
 	} else if s, ok := c.Conn.(netLayer.Splicer); ok {
-		r, conn = s.CanSplice()
+		r, conn = s.CanSpliceWrite()
 	}
 
 	return

@@ -11,7 +11,7 @@ import (
 	"github.com/e1732a364fed/v2ray_simple/utils"
 )
 
-// 实现 net.Conn, io.ReaderFrom, utils.User, utils.MultiWriter, utils.MultiReader, netLayer.Splicer, netLayer.ConnWrapper
+// 实现 net.Conn, io.ReaderFrom, utils.User, utils.MultiWriter, utils.MultiReader, netLayer.Splicer, netLayer.ConnWrapper, netLayer.SpliceReader
 type UserTCPConn struct {
 	net.Conn
 
@@ -45,18 +45,50 @@ func (c *UserTCPConn) canDirectWrite() bool {
 	return c.version == 1 || (c.version == 0 && !(c.isServerEnd && !c.isntFirstPacket))
 }
 
-func (c *UserTCPConn) EverPossibleToSplice() bool {
+// 当底层链接可以暴露为 tcp或 unix链接时，返回true
+func (c *UserTCPConn) EverPossibleToSpliceRead() bool {
+	if netLayer.IsTCP(c.Conn) != nil {
+		return true
+	}
+	if netLayer.IsUnix(c.Conn) != nil {
+		return true
+	}
+
+	if s, ok := c.Conn.(netLayer.SpliceReader); ok {
+		return s.EverPossibleToSpliceRead()
+	}
+
+	return false
+}
+
+func (c *UserTCPConn) CanSpliceRead() (bool, *net.TCPConn, *net.UnixConn) {
+	if c.isServerEnd {
+		if c.remainFirstBufLen > 0 {
+			return false, nil, nil
+		}
+
+	} else if c.version == 0 {
+		if !c.isntFirstPacket {
+			return false, nil, nil
+		}
+	}
+
+	return netLayer.ReturnSpliceRead(c.Conn)
+
+}
+
+func (c *UserTCPConn) EverPossibleToSpliceWrite() bool {
 
 	if netLayer.IsTCP(c.Conn) != nil {
 		return true
 	}
 	if s, ok := c.Conn.(netLayer.Splicer); ok {
-		return s.EverPossibleToSplice()
+		return s.EverPossibleToSpliceWrite()
 	}
 	return false
 }
 
-func (c *UserTCPConn) CanSplice() (r bool, conn *net.TCPConn) {
+func (c *UserTCPConn) CanSpliceWrite() (r bool, conn *net.TCPConn) {
 
 	if !c.canDirectWrite() {
 		return
@@ -67,7 +99,7 @@ func (c *UserTCPConn) CanSplice() (r bool, conn *net.TCPConn) {
 		conn = tc
 
 	} else if s, ok := c.Conn.(netLayer.Splicer); ok {
-		r, conn = s.CanSplice()
+		r, conn = s.CanSpliceWrite()
 	}
 
 	return
@@ -252,8 +284,9 @@ func (c *UserTCPConn) ReadBuffers() (bs [][]byte, err error) {
 
 		if c.remainFirstBufLen > 0 { //firstPayload 已经被最开始的main.go 中的 Read读掉了，所以 在调用 ReadBuffers 时 c.remainFirstBufLen 一般为 0, 所以一般不会调用这里
 
-			return netLayer.ReadBuffersFrom(c.optionalReader, nil, nil)
-
+			bs, err = netLayer.ReadBuffersFrom(c.optionalReader, nil, nil)
+			c.remainFirstBufLen -= utils.BuffersLen(bs)
+			return
 		} else {
 
 			return netLayer.ReadBuffersFrom(c.Conn, c.rr, c.mr)
