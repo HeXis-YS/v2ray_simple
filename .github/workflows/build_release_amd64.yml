@@ -31,6 +31,6 @@ jobs:
       if: github.event_name == 'release'
       with:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: cmd/verysimple/*
+        file: cmd/verysimple/verysimple_*
         tag: ${{ github.ref }}
         file_glob: true
