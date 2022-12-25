@@ -10,20 +10,9 @@ prefix :=verysimple
 cmd:=go build -tags "$(tags)"  -trimpath -ldflags "-X 'main.Version=${BUILD_VERSION}' -s -w -buildid="  -o
 
 
-ifdef PACK
 define compile
-	CGO_ENABLED=0 GOOS=$(2) GOARCH=$(3) GOAMD64=$(4) $(cmd) ${prefix}_$(1)
-	mv ${prefix}_$(1) verysimple$(5)
-	tar -cJf ${prefix}_$(1).tar.xz verysimple$(5) -C ../../ examples/
-	rm verysimple$(5)
+	CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) GOAMD64=$(3) $(cmd) ${prefix}_$(1)_$(2)_$(3)$(4)
 endef
-
-else
-
-define compile
-	CGO_ENABLED=0 GOOS=$(2) GOARCH=$(3) GOAMD64=$(4) $(cmd) ${prefix}_$(1)$(5)
-endef
-endif
 
 
 main: linux_amd64_v1 linux_amd64_v2 linux_amd64_v3 windows_amd64_v1 windows_amd64_v2 windows_amd64_v3
@@ -32,17 +21,17 @@ main: linux_amd64_v1 linux_amd64_v2 linux_amd64_v3 windows_amd64_v1 windows_amd6
 # 关于arm版本号 https://github.com/goreleaser/goreleaser/issues/36
 
 linux_amd64_v1:
-	$(call compile,linux_amd64_v1,linux,amd64,v1)
+	$(call compile,linux,amd64,v1)
 linux_amd64_v2:
-	$(call compile,linux_amd64_v2,linux,amd64,v2)
+	$(call compile,linux,amd64,v2)
 linux_amd64_v3:
-	$(call compile,linux_amd64_v3,linux,amd64,v3)
+	$(call compile,linux,amd64,v3)
 windows_amd64_v1:
-	$(call compile,windows_amd64_v1,windows,amd64,v1,.exe)
+	$(call compile,windows,amd64,v1,.exe)
 windows_amd64_v2:
-	$(call compile,windows_amd64_v2,windows,amd64,v2,.exe)
+	$(call compile,windows,amd64,v2,.exe)
 windows_amd64_v3:
-	$(call compile,windows_amd64_v3,windows,amd64,v3,.exe)
+	$(call compile,windows,amd64,v3,.exe)
 
 
 clean:

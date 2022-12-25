@@ -24,18 +24,13 @@ jobs:
     
     - name: Build
       run: |
-        cd cmd/verysimple/ && make -f Makefile_release_amd64.mk main PACK=1 BUILD_VERSION=${{ steps.get_version.outputs.VERSION }}
-    
-    - name: touch xz archive
-      shell: bash
-      run: |
-        cd cmd/verysimple/ && touch -mt $(date +%Y01010000) *.tar.xz
+        cd cmd/verysimple/ && make -f Makefile_release_amd64.mk main BUILD_VERSION=${{ steps.get_version.outputs.VERSION }}
     
     - name: Upload binaries to release
       uses: svenstaro/upload-release-action@v2
       if: github.event_name == 'release'
       with:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: cmd/verysimple/*.tar.xz
+        file: cmd/verysimple/*
         tag: ${{ github.ref }}
         file_glob: true
