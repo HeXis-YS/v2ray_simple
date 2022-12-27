@@ -27,7 +27,8 @@ func getShadowTlsPasswordFromExtra(extra map[string]any) string {
 	return ""
 }
 
-func shadowTls1(servername string, clientConn net.Conn) (tlsConn *Conn, err error) {
+// 转发并判断tls1握手结束后直接返回
+func shadowTls1(servername string, clientConn net.Conn) (err error) {
 	var fakeConn net.Conn
 	fakeConn, err = net.Dial("tcp", servername+":443")
 	if err != nil {
@@ -70,21 +71,18 @@ func shadowTls1(servername string, clientConn net.Conn) (tlsConn *Conn, err erro
 			{Index: 2, E: e2},
 		}}
 
-		return nil, e
+		return e
 	}
 
 	if ce := utils.CanLogDebug("shadowTls fake ok "); ce != nil {
 		ce.Write()
 	}
 
-	tlsConn = &Conn{
-		Conn: clientConn,
-	}
-
 	return
 }
 
-func shadowTls2(servername string, clientConn net.Conn, password string) (tlsConn *Conn, err error) {
+// 握手成功后返回 *FakeAppDataConn
+func shadowTls2(servername string, clientConn net.Conn, password string) (result net.Conn, err error) {
 	var fakeConn net.Conn
 	fakeConn, err = net.Dial("tcp", servername+":443")
 	if err != nil {
@@ -111,20 +109,12 @@ func shadowTls2(servername string, clientConn net.Conn, password string) (tlsCon
 
 		realconn := &FakeAppDataConn{
 			Conn: clientConn,
+
+			OptionalReader:          firstPayload,
+			OptionalReaderRemainLen: firstPayload.Len(),
 		}
 
-		allDataConn := &netLayer.IOWrapper{
-			Reader: &utils.ReadWrapper{
-				Reader:            realconn,
-				OptionalReader:    firstPayload,
-				RemainFirstBufLen: firstPayload.Len(),
-			},
-			Writer: realconn,
-		}
-
-		return &Conn{
-			Conn: allDataConn,
-		}, nil
+		return realconn, nil
 	} else if err == utils.ErrFailed {
 		if ce := utils.CanLogWarn("shadowTls2 fake failed!"); ce != nil {
 			ce.Write()
@@ -138,12 +128,13 @@ func shadowTls2(servername string, clientConn net.Conn, password string) (tlsCon
 
 }
 
+// 根据shadowTls v2的方式，它一定会返回一个 firstPayload
 func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils.HashWriter) (*bytes.Buffer, error) {
 	var header [5]byte
 	step := 0
 	var applicationDataCount int
 
-	buf := utils.GetBuf()
+	var firstPayload *bytes.Buffer
 
 	for {
 		if ce := utils.CanLogDebug("shadowTls2 copy "); ce != nil {
@@ -157,6 +148,10 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 		netLayer.PersistConn(clientConn)
 
 		if err != nil {
+			if firstPayload != nil {
+				utils.PutBuf(firstPayload)
+
+			}
 			return nil, utils.ErrInErr{ErrDetail: err, ErrDesc: "shadowTls2, io.ReadFull err"}
 		}
 
@@ -172,21 +167,25 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 
 		if contentType == 23 {
 
+			if firstPayload == nil {
+				firstPayload = utils.GetBuf()
+			}
+
 			netLayer.SetCommonReadTimeout(clientConn)
 
-			_, err = io.Copy(buf, io.LimitReader(clientConn, int64(length)))
+			_, err = io.Copy(firstPayload, io.LimitReader(clientConn, int64(length)))
 
 			netLayer.PersistRead(clientConn)
 
 			if err != nil {
-				utils.PutBuf(buf)
+				utils.PutBuf(firstPayload)
 				return nil, utils.ErrInErr{ErrDetail: err, ErrDesc: "shadowTls2, copy err1"}
 			}
 
 			if hashW.Written() && length >= 8 {
 
 				checksum := hashW.Sum()
-				first8 := buf.Bytes()[:8]
+				first8 := firstPayload.Bytes()[:8]
 
 				if ce := utils.CanLogDebug("shadowTls2 check "); ce != nil {
 					ce.Write(zap.Int("step", step),
@@ -196,23 +195,23 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 				}
 
 				if bytes.Equal(first8, checksum) {
-					buf.Next(8)
-					return buf, nil
+					firstPayload.Next(8)
+					return firstPayload, nil
 				}
 			}
 
 			netLayer.SetCommonWriteTimeout(fakeConn)
 
-			_, err = io.Copy(fakeConn, io.MultiReader(bytes.NewReader(header[:]), buf))
+			_, err = io.Copy(fakeConn, io.MultiReader(bytes.NewReader(header[:]), firstPayload))
 
 			netLayer.PersistWrite(fakeConn)
 
 			if err != nil {
-				utils.PutBuf(buf)
+				utils.PutBuf(firstPayload)
 				return nil, utils.ErrInErr{ErrDetail: err, ErrDesc: "shadowTls2, copy err2"}
 			}
 
-			buf.Reset()
+			firstPayload.Reset()
 
 			applicationDataCount++
 		} else {
@@ -226,17 +225,25 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 			netLayer.PersistWrite(fakeConn)
 
 			if err != nil {
+				if firstPayload != nil {
+					utils.PutBuf(firstPayload)
+				}
 				return nil, utils.ErrInErr{ErrDetail: err, ErrDesc: "shadowTls2, copy err3"}
 			}
 		}
 
 		const maxAppDataCount = 3
 		if applicationDataCount > maxAppDataCount {
+			utils.PutBuf(firstPayload)
+
 			return nil, utils.ErrFailed
 		}
 		step++
 
 		if step > 8 {
+			if firstPayload != nil {
+				utils.PutBuf(firstPayload)
+			}
 			return nil, errors.New("shadowTls2 copy loop > 8, maybe under attack")
 
 		}
@@ -244,7 +251,7 @@ func shadowCopyHandshakeClientToFake(fakeConn, clientConn net.Conn, hashW *utils
 
 }
 
-// 第一次写时写入一个hash，其余直接使用 FakeAppDataConn
+// 第一次写时写入一个hash，其余直接使用 FakeAppDataConn. 实现 utils.MultiWriter
 type shadowClientConn struct {
 	*FakeAppDataConn
 	sum []byte
@@ -270,4 +277,27 @@ func (c *shadowClientConn) Write(p []byte) (n int, err error) {
 		return
 	}
 	return c.FakeAppDataConn.Write(p)
+}
+
+func (c *shadowClientConn) WriteBuffers(bss [][]byte) (int64, error) {
+	if c.sum != nil {
+		sum := c.sum
+		c.sum = nil
+
+		result, dup := utils.MergeBuffersWithPrefix(sum, bss)
+
+		allDataLen := len(result) - len(sum)
+
+		_, err := c.FakeAppDataConn.Write(result)
+
+		if dup {
+			utils.PutPacket(result)
+		}
+		if err != nil {
+			return 0, err
+		}
+		return int64(allDataLen), nil
+
+	}
+	return c.FakeAppDataConn.WriteBuffers(bss)
 }

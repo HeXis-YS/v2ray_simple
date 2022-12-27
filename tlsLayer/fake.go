@@ -1,8 +1,6 @@
 package tlsLayer
 
 import (
-	"bytes"
-	"crypto/tls"
 	"encoding/binary"
 	"io"
 	"net"
@@ -10,13 +8,24 @@ import (
 	"github.com/e1732a364fed/v2ray_simple/utils"
 )
 
-// 读写都按tls application data 的格式走，其实就是加个包头
+// 读写都按tls application data 的格式走，其实就是加个包头. 实现 utils.MultiWriter
 type FakeAppDataConn struct {
 	net.Conn
 	readRemaining int
+
+	OptionalReader          io.Reader
+	OptionalReaderRemainLen int
 }
 
 func (c *FakeAppDataConn) Read(p []byte) (n int, err error) {
+	if c.OptionalReaderRemainLen > 0 {
+		n, err := c.OptionalReader.Read(p)
+		if n > 0 {
+			c.OptionalReaderRemainLen -= n
+		}
+		return n, err
+	}
+
 	if c.readRemaining > 0 {
 		if len(p) > c.readRemaining {
 			p = p[:c.readRemaining]
@@ -46,46 +55,6 @@ func (c *FakeAppDataConn) Read(p []byte) (n int, err error) {
 	return
 }
 
-func WriteAppData(conn io.Writer, buf *bytes.Buffer, d []byte) (n int, err error) {
-	var h [5]byte
-	h[0] = 23
-	binary.BigEndian.PutUint16(h[1:3], tls.VersionTLS12)
-	binary.BigEndian.PutUint16(h[3:], uint16(len(d)))
-
-	shouldPut := false
-
-	if buf == nil {
-		buf = utils.GetBuf()
-		shouldPut = true
-	}
-	buf.Write(h[:])
-	buf.Write(d)
-
-	n, err = conn.Write(buf.Bytes())
-
-	if shouldPut {
-		utils.PutBuf(buf)
-
-	}
-	return
-}
-
-// 一般conn直接为tcp连接，而它是有系统缓存的，因此我们一般不需要特地创建一个缓存
-// 写两遍之后在发出
-func WriteAppDataNoBuf(conn io.Writer, d []byte) (n int, err error) {
-	var h [5]byte
-	h[0] = 23
-	binary.BigEndian.PutUint16(h[1:3], tls.VersionTLS12)
-	binary.BigEndian.PutUint16(h[3:], uint16(len(d)))
-
-	_, err = conn.Write(h[:])
-	if err != nil {
-		return
-	}
-	return conn.Write(d)
-
-}
-
 func (c *FakeAppDataConn) Write(p []byte) (n int, err error) {
 
 	const maxlen = 1 << 14
@@ -112,4 +81,17 @@ func (c *FakeAppDataConn) Write(p []byte) (n int, err error) {
 
 func (c *FakeAppDataConn) Upstream() any {
 	return c.Conn
+}
+
+func (c *FakeAppDataConn) WriteBuffers(bss [][]byte) (int64, error) {
+	// 在server端，从direct用readv读到的数据可以用 WriteBuffers写回，可以加速
+	//不过虽然如此, 一般情况下是不会发生的，除非 你裸奔使用vless/trojan,
+	//不然就是用vmess/ss，除非 vmess/ss实现 WriteBuffers, 否则这里不会被调用到
+
+	allLen := utils.BuffersLen(bss)
+	err := WriteAppDataHeader(c.Conn, allLen)
+	if err != nil {
+		return 0, err
+	}
+	return utils.BuffersWriteTo(bss, c.Conn)
 }

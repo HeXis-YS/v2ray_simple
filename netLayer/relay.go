@@ -27,19 +27,22 @@ func CanWEverSplice(writeConn io.Writer) (wCanSplice bool) {
 // 会接连尝试 splice、循环readv 以及 原始Copy方法。如果 UseReadv 的值为false，则不会使用readv。
 //
 // identity只用于debug 日志输出.
-func TryCopy(writeConn io.Writer, readConn io.Reader, identity uint32) (allnum int64, err error) {
+func TryCopy(writeConn io.Writer, readConn io.Reader, id uint32) (allnum int64, err error) {
 	var multiWriter utils.MultiWriter
 
 	var rawReadConn syscall.RawConn
 	var isWriteConn_MultiWriter bool
 
 	var mr utils.MultiReader
+	var br utils.BuffersReader
 
-	var readv_withMultiReader bool
+	var userlevel_readv bool
+
+	readvType := 0
 
 	if ce := utils.CanLogDebug("TryCopy"); ce != nil {
 		ce.Write(
-			zap.Uint32("id", identity),
+			zap.Uint32("id", id),
 			zap.String("from", reflect.TypeOf(readConn).String()),
 			zap.String("->", reflect.TypeOf(writeConn).String()),
 		)
@@ -54,7 +57,7 @@ func TryCopy(writeConn io.Writer, readConn io.Reader, identity uint32) (allnum i
 			if rCanSplice {
 
 				if ce := utils.CanLogDebug("copying with splice"); ce != nil {
-					ce.Write(zap.Uint32("id", identity))
+					ce.Write(zap.Uint32("id", id))
 				}
 
 				goto copy
@@ -62,7 +65,7 @@ func TryCopy(writeConn io.Writer, readConn io.Reader, identity uint32) (allnum i
 				if sr.EverPossibleToSpliceRead() {
 
 					if ce := utils.CanLogDebug("copying with splice, waiting spliceReader"); ce != nil {
-						ce.Write(zap.Uint32("id", identity))
+						ce.Write(zap.Uint32("id", id))
 					}
 
 					for {
@@ -75,7 +78,7 @@ func TryCopy(writeConn io.Writer, readConn io.Reader, identity uint32) (allnum i
 							}
 
 							if ce := utils.CanLogDebug("copying with splice, spliceReader ok"); ce != nil {
-								ce.Write(zap.Uint32("id", identity))
+								ce.Write(zap.Uint32("id", id))
 							}
 
 							goto copy
@@ -110,21 +113,18 @@ func TryCopy(writeConn io.Writer, readConn io.Reader, identity uint32) (allnum i
 	if rawReadConn == nil {
 		var ok bool
 		mr, ok = readConn.(utils.MultiReader)
-		if ok && mr.WillReadBuffersBenifit() {
-			readv_withMultiReader = true
+		if ok {
+
+			readvType = mr.WillReadBuffersBenifit()
+			if readvType != 0 {
+
+				userlevel_readv = true
+
+			} else {
+				goto classic
+			}
 		} else {
 			goto classic
-
-		}
-	}
-
-	if ce := utils.CanLogDebug("copying with readv"); ce != nil {
-		if readv_withMultiReader {
-			ce.Write(zap.Uint32("id", identity),
-				zap.String("with", "MultiReader"))
-
-		} else {
-			ce.Write(zap.Uint32("id", identity))
 
 		}
 	}
@@ -133,28 +133,71 @@ func TryCopy(writeConn io.Writer, readConn io.Reader, identity uint32) (allnum i
 
 		multiWriter, isWriteConn_MultiWriter = writeConn.(utils.MultiWriter)
 
-		if readv_withMultiReader && !isWriteConn_MultiWriter {
+		if userlevel_readv && !isWriteConn_MultiWriter {
 			goto classic
 		}
 	}
 
-	{
-		var readv_mem *readvMem
+	if ce := utils.CanLogDebug("copying with readv"); ce != nil {
+		if userlevel_readv {
+			ce.Write(zap.Uint32("id", id),
+				zap.String("with", "buffersReader"))
 
-		if !readv_withMultiReader {
-			readv_mem = get_readvMem()
-			defer put_readvMem(readv_mem)
+		} else {
+			ce.Write(zap.Uint32("id", id))
+
+		}
+	}
+
+	{
+		var readv_mem *utils.ReadvMem
+
+		if !userlevel_readv {
+			readv_mem = utils.Get_readvMem()
+			defer utils.Put_readvMem(readv_mem)
+		} else {
+			//循环读写直到 CanMultiRead 返回 true
+			bs := utils.GetPacket()
+			for {
+
+				if mr.CanMultiRead() {
+					break
+				}
+				var n int
+				n, err = readConn.Read(bs)
+				if err != nil {
+					return
+				}
+				n, err = writeConn.Write(bs[:n])
+
+				allnum += int64(n)
+				if err != nil {
+					return
+				}
+			}
+
+			utils.PutPacket(bs)
+
+			if readvType == 2 {
+				userlevel_readv = false
+				rawReadConn = readConn.(utils.Readver).GetRawForReadv()
+
+			} else {
+				br = readConn.(utils.BuffersReader)
+			}
 		}
 
 		//这个for循环 只会通过 return 跳出, 不会落到外部
 		for {
 			var buffers net.Buffers
 
-			if readv_withMultiReader {
-				buffers, err = mr.ReadBuffers()
+			//自此 userlevel_readv 将被当作 是否使用 ReadBuffers 的标识
+
+			if userlevel_readv {
+				buffers, err = br.ReadBuffers()
 
 			} else {
-				buffers, err = readvFrom(rawReadConn, readv_mem)
+				buffers, err = utils.ReadvFrom(rawReadConn, readv_mem)
 
 			}
 
@@ -164,8 +207,8 @@ func TryCopy(writeConn io.Writer, readConn io.Reader, identity uint32) (allnum i
 			var thisWriteNum int64
 			var writeErr error
 
-			// vless/trojan.UserTCPConn, ws.Conn 和 grpc.multiConn 实现了 utils.MultiWriter
-			// vless/trojan的 UserTCPConn 会 间接调用 ws.Conn 和 grpc.multiConn 的 WriteBuffers
+			// vless/trojan.UserTCPConn, ws.Conn  实现了 utils.MultiWriter
+			// vless/trojan的 UserTCPConn 会 间接调用 ws.Conn  的 WriteBuffers
 
 			if isWriteConn_MultiWriter {
 				thisWriteNum, writeErr = multiWriter.WriteBuffers(buffers)
@@ -191,16 +234,18 @@ func TryCopy(writeConn io.Writer, readConn io.Reader, identity uint32) (allnum i
 				return
 			}
 
-			if !readv_withMultiReader {
-				buffers = utils.RecoverBuffers(buffers, readv_buffer_allocLen, ReadvSingleBufLen)
+			if userlevel_readv {
+				br.PutBuffers(buffers)
 
+			} else {
+				buffers = utils.RecoverBuffers(buffers, utils.Readv_buffer_allocLen, utils.ReadvSingleBufLen)
 			}
 
 		}
 	}
 classic:
 	if ce := utils.CanLogDebug("copying with classic method"); ce != nil {
-		ce.Write(zap.Uint32("id", identity))
+		ce.Write(zap.Uint32("id", id))
 	}
 copy:
 
@@ -215,7 +260,7 @@ func TryCopyOnce(writeConn io.Writer, readConn io.Reader) (allnum int64, err err
 	var buffers net.Buffers
 	var rawConn syscall.RawConn
 
-	var rm *readvMem
+	var rm *utils.ReadvMem
 
 	if ce := utils.CanLogDebug("TryCopy"); ce != nil {
 		ce.Write(
@@ -240,10 +285,10 @@ func TryCopyOnce(writeConn io.Writer, readConn io.Reader) (allnum int64, err err
 		ce.Write()
 	}
 
-	rm = get_readvMem()
-	defer put_readvMem(rm)
+	rm = utils.Get_readvMem()
+	defer utils.Put_readvMem(rm)
 
-	buffers, err = readvFrom(rawConn, rm)
+	buffers, err = utils.ReadvFrom(rawConn, rm)
 	if err != nil {
 		return 0, err
 	}
