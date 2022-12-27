@@ -5,7 +5,12 @@
 
 #BUILD_VERSION   := vx.x.x-beta.x 这个将在github action里自动通过tag配置, 参见 .github/workflows/build_release.yml
 
+ifdef LITE
+prefix :=verysimple_lite
+tags := notun,noquic,nocli
+else
 prefix :=verysimple
+endif
 
 cmd:=go build -tags "$(tags)"  -trimpath -ldflags "-X 'main.Version=${BUILD_VERSION}' -s -w -buildid="  -o
 
@@ -15,19 +20,15 @@ define compile
 endef
 
 
-main: linux_amd64_v1 linux_amd64_v2 linux_amd64_v3 windows_amd64_v1 windows_amd64_v2 windows_amd64_v3
+main: linux_amd64_v2 linux_amd64_v3 windows_amd64_v2 windows_amd64_v3
 
 # 注意调用参数时，逗号前后不能留空格
 # 关于arm版本号 https://github.com/goreleaser/goreleaser/issues/36
 
-linux_amd64_v1:
-	$(call compile,linux,amd64,v1)
 linux_amd64_v2:
 	$(call compile,linux,amd64,v2)
 linux_amd64_v3:
 	$(call compile,linux,amd64,v3)
-windows_amd64_v1:
-	$(call compile,windows,amd64,v1,.exe)
 windows_amd64_v2:
 	$(call compile,windows,amd64,v2,.exe)
 windows_amd64_v3:
@@ -38,4 +39,3 @@ clean:
 	rm -f ${prefix}
 	rm -f ${prefix}.exe
 	rm -f ${prefix}_*
-	rm -f *.tar.xz

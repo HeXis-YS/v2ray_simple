@@ -7,7 +7,6 @@ on:
 
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
@@ -25,6 +24,33 @@ jobs:
     - name: Build
       run: |
         cd cmd/verysimple/ && make -f Makefile_release_amd64.mk main BUILD_VERSION=${{ steps.get_version.outputs.VERSION }}
+    
+    - name: Upload binaries to release
+      uses: svenstaro/upload-release-action@v2
+      if: github.event_name == 'release'
+      with:
+        repo_token: ${{ secrets.GITHUB_TOKEN }}
+        file: cmd/verysimple/verysimple_*
+        tag: ${{ github.ref }}
+        file_glob: true
+
+  build_lite:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.19
+
+    - name: Get version
+      id: get_version
+      run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
+    
+    - name: Build
+      run: |
+        cd cmd/verysimple/ && make -f Makefile_release_amd64.mk main LITE=1 BUILD_VERSION=${{ steps.get_version.outputs.VERSION }}
     
     - name: Upload binaries to release
       uses: svenstaro/upload-release-action@v2
