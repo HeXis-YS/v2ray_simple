@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"bytes"
+	"io"
 	"math/rand"
 	"os"
 	"strings"
@@ -34,7 +36,8 @@ func GenerateRandomChar() byte {
 
 }
 
-// 本来可以直接用 fmt.Print, 但是那个Print多了一次到any的装箱，所以如果只
+// 本来可以直接用 fmt.Print, 但是那个Print多了一次到any的装箱，
+// 而且准备步骤太多, 所以如果只
 // 打印一个字符串的话，不妨直接调用 os.Stdout.WriteString(str)。
 func PrintStr(str string) {
 	os.Stdout.WriteString(str)
@@ -65,4 +68,35 @@ func GetPurgedTomlStr(v any) (string, error) {
 	}
 	return sb.String(), nil
 
+}
+
+// mimic GetPurgedTomlStr
+func GetPurgedTomlBytes(v any) ([]byte, error) {
+	buf := GetBuf()
+	defer PutBuf(buf)
+	if err := toml.NewEncoder(buf).Encode(v); err != nil {
+		return nil, err
+	}
+	lines := bytes.Split(buf.Bytes(), []byte{'\n'})
+	var sb bytes.Buffer
+
+	for _, l := range lines {
+		if !bytes.HasSuffix(l, []byte(` = ""`)) && !bytes.HasSuffix(l, []byte(` = false`)) && !bytes.HasSuffix(l, []byte(` = 0`)) {
+
+			sb.Write(l)
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.Bytes(), nil
+
+}
+
+type PrefixWriter struct {
+	io.Writer
+	Prefix []byte
+}
+
+func (lw *PrefixWriter) Write(p []byte) (n int, err error) {
+	lw.Writer.Write(lw.Prefix)
+	return lw.Writer.Write(p)
 }

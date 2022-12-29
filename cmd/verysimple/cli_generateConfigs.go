@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,43 @@ import (
 	"github.com/e1732a364fed/v2ray_simple/utils"
 	"github.com/manifoldco/promptui"
 )
+
+func interactively_exportVsConf() {
+	vc := mainM.DumpVSConf()
+
+	bs, e := utils.GetPurgedTomlBytes(vc)
+	if e != nil {
+		utils.PrintStr("转换格式错误\n")
+		utils.PrintStr(e.Error())
+		utils.PrintStr("\n")
+		return
+	}
+
+	utils.PrintStr("请输入生成配置文件的名称(不含.toml后缀)\n")
+
+	promptDomain := promptui.Prompt{
+		Label: "文件名",
+	}
+
+	result, err := promptDomain.Run()
+	if err != nil {
+		fmt.Println("Prompt failed ", err, result)
+		return
+	}
+
+	fmt.Printf("你输入了 %s\n", result)
+
+	e = os.WriteFile(result+".toml", bs, 0666)
+
+	if e != nil {
+		utils.PrintStr("写入文件错误\n")
+		utils.PrintStr(e.Error())
+		utils.PrintStr("\n")
+		return
+	}
+
+	utils.PrintStr("导出成功!\n")
+}
 
 func interactively_generate_share(conf *proxy.StandardConf) {
 
@@ -52,6 +90,15 @@ func interactively_generate_share(conf *proxy.StandardConf) {
 			},
 		},
 		{
+			Name: "v2rayN分享链接 (vmess://base64)",
+			f: func() {
+				for _, v := range conf.Dial {
+					url := configAdapter.ToV2rayN(v)
+					fmt.Println(url)
+				}
+			},
+		},
+		{
 			Name: "xray分享链接标准提案 (#716)",
 			f: func() {
 				for _, v := range conf.Dial {
@@ -69,15 +116,7 @@ func interactively_generate_share(conf *proxy.StandardConf) {
 				}
 			},
 		},
-		{
-			Name: "v2rayN分享链接 (vmess://base64)",
-			f: func() {
-				for _, v := range conf.Dial {
-					url := configAdapter.ToV2rayN(v)
-					fmt.Println(url)
-				}
-			},
-		},
+
 		{
 			Name: "Quantumult X (圈叉的配置的 [server_local] 部分)",
 			f: func() {
@@ -117,22 +156,12 @@ func interactively_generate_share(conf *proxy.StandardConf) {
 
 func interactively_generateConf(confClient, confServer *proxy.StandardConf) {
 
-	select0 := promptui.Select{
-		Label: "【提醒】我们交互模式生成的配置都是直接带tls的,且客户端【默认使用utls】模拟chrome指纹",
-		Items: []string{"知道了"},
-	}
-
-	_, _, err := select0.Run()
-	if err != nil {
-		fmt.Printf("Prompt failed %v\n", err)
-		return
-	}
-
 	select2 := promptui.Select{
 		Label: "请选择你客户端想监听的协议",
 		Items: []string{
 			"socks5",
 			"http",
+			"socks5http",
 		},
 	}
 	i2, result, err := select2.Run()
@@ -144,7 +173,7 @@ func interactively_generateConf(confClient, confServer *proxy.StandardConf) {
 
 	fmt.Printf("你选择了 %s\n", result)
 
-	if i2 < 2 {
+	if i2 < 3 {
 		confClient.Listen = append(confClient.Listen, &proxy.ListenConf{})
 	} else {
 		utils.PrintStr("Prompt failed, werid input")
@@ -199,11 +228,12 @@ func interactively_generateConf(confClient, confServer *proxy.StandardConf) {
 			"vless",
 			"vmess",
 			"trojan",
+			"shadowsocks",
 		},
 	}
 	i3, result, err := select3.Run()
 
-	if err != nil || i3 != 0 {
+	if err != nil {
 		fmt.Println("Prompt failed ", err, i3)
 		return
 	}
@@ -230,7 +260,6 @@ func interactively_generateConf(confClient, confServer *proxy.StandardConf) {
 	clientDial.Protocol = theProtocol
 	clientDial.TLS = true
 	clientDial.Tag = "my_proxy"
-	//clientDial.Utls = true
 
 	select4 := promptui.Select{
 		Label: "请选择你客户端拨号想使用的高级层(与服务端监听的高级层相同)",
@@ -244,7 +273,7 @@ func interactively_generateConf(confClient, confServer *proxy.StandardConf) {
 	i4, result, err := select4.Run()
 
 	if err != nil {
-		fmt.Println("Prompt failed ", err, i3)
+		fmt.Println("Prompt failed ", err, i4)
 		return
 	}
 
@@ -298,8 +327,7 @@ func interactively_generateConf(confClient, confServer *proxy.StandardConf) {
 	utils.PrintStr("请输入你服务端的域名\n")
 
 	promptDomain := promptui.Prompt{
-		Label:    "域名",
-		Validate: func(s string) error { return nil }, //允许不设域名
+		Label: "域名",
 	}
 
 	result, err = promptDomain.Run()
@@ -322,12 +350,12 @@ func interactively_generateConf(confClient, confServer *proxy.StandardConf) {
 	i5, result, err := select5.Run()
 
 	if err != nil {
-		fmt.Println("Prompt failed ", err, i3)
+		fmt.Println("Prompt failed ", err, i5)
 		return
 	}
 	if i5 == 0 {
 		uuid := utils.GenerateUUIDStr()
-		clientDial.Uuid = uuid
+		clientDial.UUID = uuid
 		fmt.Println("随机生成的uuid为", uuid)
 	} else {
 		promptUUID := promptui.Prompt{
@@ -343,7 +371,7 @@ func interactively_generateConf(confClient, confServer *proxy.StandardConf) {
 
 		fmt.Printf("你输入了 %s\n", result)
 
-		clientDial.Uuid = result
+		clientDial.UUID = result
 	}
 
 	var serverListenStruct proxy.ListenConf
@@ -370,7 +398,7 @@ func interactively_generateConf(confClient, confServer *proxy.StandardConf) {
 	i6, result, err := select6.Run()
 
 	if err != nil {
-		fmt.Println("Prompt failed ", err, i3)
+		fmt.Println("Prompt failed ", err, i6)
 		return
 	}
 	if i6 == 0 {

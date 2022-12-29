@@ -29,13 +29,6 @@ func (cc CliCmd) String() string {
 	return cc.Name
 }
 
-// func nlist(list []CliCmd) (result []string) {
-// 	for _, v := range list {
-// 		result = append(result, v.Name)
-// 	}
-// 	return
-// }
-
 func flist(list []*CliCmd) (result []func()) {
 	for _, v := range list {
 		result = append(result, v.f)
@@ -70,9 +63,11 @@ func init() {
 
 	cliCmdList = append(cliCmdList, &CliCmd{
 		"【生成分享链接】<-当前的配置", func() {
-			sc := mainM.GetStandardConfFromCurrentState()
+			sc := mainM.DumpStandardConf()
 			interactively_generate_share(&sc)
 		},
+	}, &CliCmd{
+		"【导出标准配置文件】<-当前全部配置", interactively_exportVsConf,
 	}, &CliCmd{
 		"【交互生成配置】，超级强大", func() { generateConfigFileInteractively(mainM) },
 	}, &CliCmd{
@@ -102,29 +97,6 @@ func runCli_func() {
 	}()
 
 	loadPreferences()
-
-	/*
-		langList := []string{"简体中文", "English"}
-		utils.PrintStr("Welcome to Interactive Mode, please choose a Language \n")
-		Select := promptui.Select{
-			Label: "Select Language",
-			Items: langList,
-		}
-
-		_, result, err := Select.Run()
-
-		if err != nil {
-			fmt.Printf("Prompt failed %v\n", err)
-			return
-		}
-
-		fmt.Printf("You choose %q\n", result)
-
-		if result != langList[0] {
-			utils.PrintStr("Sorry, language not supported yet \n")
-			return
-		}
-	*/
 
 	searcher := func(input string, index int) bool {
 		pepper := cliCmdList[index]

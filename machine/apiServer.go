@@ -7,6 +7,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +23,7 @@ curl -k https://127.0.0.1:48345/api/allstate
 */
 
 type ApiServerConf struct {
-	EnableApiServer bool   `toml:"app"`
+	EnableApiServer bool   `toml:"enable"`
 	PlainHttp       bool   `toml:"plain"`
 	KeyFile         string `toml:"key"`
 	CertFile        string `toml:"cert"`
@@ -31,23 +32,61 @@ type ApiServerConf struct {
 	Addr            string `toml:"addr"`
 }
 
-func (asc *ApiServerConf) SetupFlags() {
-	flag.BoolVar(&asc.EnableApiServer, "ea", false, "enable api server")
+// 内含默认值的 ApiServerConf
+func NewApiServerConf() (ac ApiServerConf) {
+	ac.SetupFlags(flag.NewFlagSet("", 10))
+	return
+}
 
-	flag.BoolVar(&asc.PlainHttp, "sunsafe", false, "if given, api Server will use http instead of https")
+func (asc *ApiServerConf) SetupFlags(fs *flag.FlagSet) {
+	if fs == nil {
+		fs = flag.CommandLine
+	}
+	fs.BoolVar(&asc.EnableApiServer, "ea", false, "enable api server")
 
-	flag.StringVar(&asc.PathPrefix, "spp", "/api", "api Server Path Prefix, must start with '/' ")
-	flag.StringVar(&asc.AdminPass, "sap", "", "api Server admin password, but won't be used if it's empty")
-	flag.StringVar(&asc.Addr, "sa", "127.0.0.1:48345", "api Server listen address")
-	flag.StringVar(&asc.CertFile, "scert", "", "api Server tls cert file path")
-	flag.StringVar(&asc.KeyFile, "skey", "", "api Server tls cert key path")
+	fs.BoolVar(&asc.PlainHttp, "sunsafe", false, "if given, api Server will use http instead of https")
 
+	fs.StringVar(&asc.PathPrefix, "spp", "/api", "api Server Path Prefix, must start with '/' ")
+	fs.StringVar(&asc.AdminPass, "sap", "", "api Server admin password, but won't be used if it's empty")
+	fs.StringVar(&asc.Addr, "sa", "127.0.0.1:48345", "api Server listen address")
+	fs.StringVar(&asc.CertFile, "scert", "", "api Server tls cert file path")
+	fs.StringVar(&asc.KeyFile, "skey", "", "api Server tls cert key path")
+
+}
+
+// 若 ref 里有与默认值不同的项且字符串不为空, 将该项的值赋值给 c
+func (c *ApiServerConf) SetNonDefault(ref *ApiServerConf) {
+	d := NewApiServerConf()
+	var emptyAc ApiServerConf
+
+	if ref.PlainHttp != d.PlainHttp {
+		c.PlainHttp = ref.PlainHttp
+	}
+	if ref.EnableApiServer != d.EnableApiServer {
+		c.EnableApiServer = ref.EnableApiServer
+	}
+
+	if ref.Addr != d.Addr && ref.Addr != emptyAc.Addr {
+		c.Addr = ref.Addr
+	}
+	if ref.AdminPass != d.AdminPass {
+		c.AdminPass = ref.AdminPass
+	}
+	if ref.PathPrefix != d.PathPrefix && ref.PathPrefix != emptyAc.PathPrefix {
+		c.PathPrefix = ref.PathPrefix
+	}
+	if ref.CertFile != d.CertFile {
+		c.CertFile = ref.CertFile
+	}
+	if ref.KeyFile != d.KeyFile {
+		c.KeyFile = ref.KeyFile
+	}
 }
 
 // 非阻塞,如果运行成功则 apiServerRunning 会被设为 true
 func (m *M) TryRunApiServer() {
 
-	m.ApiServerRunning = true
+	m.apiServerRunning = true
 
 	go m.runApiServer()
 
@@ -200,15 +239,62 @@ func (m *M) runApiServer() {
 				return
 			}
 			if isDial {
-				dc := m.getDialConfFromCurrentState(ind)
+				dc := m.dumpDialConf(ind)
 				url := proxy.ToStandardUrl(&dc.CommonConf, dc, nil)
 				w.Write([]byte(url))
 			} else {
-				lc := m.getListenConfFromCurrentState(ind)
+				lc := m.dumpListenConf(ind)
 				url := proxy.ToStandardUrl(&lc.CommonConf, nil, lc)
 				w.Write([]byte(url))
 			}
 
+		}
+
+	})
+
+	//保存所有配置到标准配置文件. 如果是GET, 直接将文件打印给客户, 如果是POST, 接收name参数并导出到文件
+	ser.addServerHandle(mux, "dump", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+
+		fn := q.Get("name")
+		if fn == "" && r.Method == "POST" {
+			if ce := utils.CanLogWarn("api server got dump request but no file name given"); ce != nil {
+				ce.Write()
+			}
+			return
+		}
+		vc := m.DumpVSConf()
+
+		bs, e := utils.GetPurgedTomlBytes(vc)
+		if e != nil {
+			if ce := utils.CanLogErr("api server: 转换格式错误"); ce != nil {
+				ce.Write(zap.Error(e))
+			}
+			w.WriteHeader(500)
+			w.Write([]byte("failed"))
+
+			return
+		}
+
+		if r.Method == "GET" {
+			w.Write(bs)
+		} else {
+			e = os.WriteFile(fn, bs, 0666)
+
+			if e != nil {
+				if ce := utils.CanLogErr("写入文件错误"); ce != nil {
+					ce.Write(zap.Error(e))
+				}
+				w.WriteHeader(500)
+				w.Write([]byte("failed"))
+
+				return
+			}
+
+			if ce := utils.CanLogInfo("导出成功"); ce != nil {
+				ce.Write(zap.String("filename", fn))
+			}
+			w.Write([]byte("ok"))
 		}
 
 	})
@@ -241,7 +327,7 @@ func (m *M) runApiServer() {
 		srv.ListenAndServeTLS(m.CertFile, m.KeyFile)
 
 	}
-	m.ApiServerRunning = false
+	m.apiServerRunning = false
 }
 
 type auth struct {

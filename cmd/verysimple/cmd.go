@@ -30,18 +30,9 @@ var (
 	exitCmds = []exitCmd{
 		{name: "sp", desc: "print supported protocols", f: printSupportedProtocols},
 		{name: "v", desc: "print the version string then exit", f: func() { printVersion_simple(os.Stdout) }},
-		{name: "gu", desc: "automatically generate a uuid for you", f: generateAndPrintUUID},
 		{name: "pifs", desc: "print all network interfaces", f: func() {
 			netLayer.PrintAllInterface(os.Stdout)
 		}},
-		{name: "cvqxtvs", isStr: true, desc: "if given, convert qx server config string to vs toml config", fs: convertQxToVs},
-		{name: "eqxrs", isStr: true, desc: "if given, automatically extract remote servers from quantumultX config for you", fs: extractQxRemoteServers},
-
-		// {name: "test", desc: "test func", f: func() {
-		// 	utils.InitLog("")
-		// 	dns := netLayer.GetSystemDNS()
-		// 	log.Println(len(dns), dns)
-		// }},
 	}
 )
 
@@ -53,6 +44,15 @@ type exitCmd struct {
 }
 
 func init() {
+
+	flag.BoolVar(&download, "d", false, " automatically download required mmdb file")
+
+	//apiServer stuff
+
+	//defaultApiServerConf.SetupFlags()
+}
+
+func initExitCmds() {
 	for i, ec := range exitCmds {
 		if ec.isStr {
 			flag.StringVar(&exitCmds[i].strValue, ec.name, ec.defaultStringValue, ec.desc)
@@ -63,11 +63,6 @@ func init() {
 		}
 	}
 
-	flag.BoolVar(&download, "d", false, " automatically download required mmdb file")
-
-	//apiServer stuff
-
-	//defaultApiServerConf.SetupFlags()
 }
 
 // 运行一些 执行后立即退出程序的 命令
@@ -151,10 +146,10 @@ func generateRandomSSlCert() {
 }
 
 func printSupportedProtocols() {
-	utils.PrintStr("Support tcp/udp/unix domain socket/tls/uTls by default.\n")
 	proxy.PrintAllServerNames()
 	proxy.PrintAllClientNames()
 	advLayer.PrintAllProtocolNames()
+	//todo: tlsLayer
 }
 
 // see https://dev.maxmind.com/geoip/geolite2-free-geolocation-data?lang=en

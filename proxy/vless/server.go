@@ -22,7 +22,7 @@ type ServerCreator struct{ proxy.CreatorCommonStruct }
 
 // 如果 lc.Version==0, 则只支持 v0.
 func (ServerCreator) NewServer(lc *proxy.ListenConf) (proxy.Server, error) {
-	uuidStr := lc.Uuid
+	uuidStr := lc.UUID
 	onlyV0 := lc.Version == 0
 
 	var s *Server
@@ -54,7 +54,7 @@ func (ServerCreator) URLToListenConf(url *url.URL, lc *proxy.ListenConf, format 
 			lc = &proxy.ListenConf{}
 
 			uuidStr := url.User.Username()
-			lc.Uuid = uuidStr
+			lc.UUID = uuidStr
 		}
 
 		return lc, nil
@@ -257,7 +257,8 @@ realPart:
 	}
 
 	if ismux {
-		mm := &proxy.UserMuxMarker{
+		mm := &proxy.UserReadWrapper{
+			Mux:  true,
 			User: utils.V2rayUser(thisUUIDBytes),
 			ReadWrapper: netLayer.ReadWrapper{
 				Conn: underlay,
@@ -285,6 +286,7 @@ realPart:
 		}, targetAddr, nil
 
 	} else {
+		//返回包装过的Conn, 而不是底层underlay, 除了需要读firstpayload之外, 还为了要支持user分流
 		uc := &UserTCPConn{
 			Conn:              underlay,
 			V2rayUser:         thisUUIDBytes,

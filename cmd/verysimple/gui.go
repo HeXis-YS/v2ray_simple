@@ -8,6 +8,7 @@ import (
 	"flag"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -16,15 +17,16 @@ import (
 	"github.com/e1732a364fed/v2ray_simple/netLayer"
 	"github.com/e1732a364fed/v2ray_simple/utils"
 	"go.uber.org/zap"
-
-	qrcode "github.com/skip2/go-qrcode"
+	"rsc.io/qr"
 )
 
-var mainwin *ui.Window
-
-var testFunc func()
-var multilineEntry *ui.MultilineEntry //用于向用户提供一些随机的有用的需要复制的字符串
-var entriesGroup *ui.Group            //父 of multilineEntry
+var (
+	mainwin        *ui.Window
+	testFunc       func()
+	multilineEntry *ui.MultilineEntry //用于向用户提供一些随机的有用的需要复制的字符串
+	entriesGroup   *ui.Group          //父 of multilineEntry
+	lastConfFile   string
+)
 
 type GuiPreference struct {
 	HttpAddr   string `toml:"proxy_http_addr"`
@@ -52,16 +54,16 @@ func init() {
 				multilineEntry.SetText(strings.Join(strs, "\n"))
 			}
 
-			var qr *qrcode.QRCode
-
-			qr, err := qrcode.New("https://example.org", qrcode.Medium)
-
-			if err != nil {
-				return
-			}
-
 			const qrname = "vs_qrcode.png"
-			qr.WriteFile(256, qrname)
+
+			c, err := qr.Encode("https://example.org", qr.L)
+			if err != nil {
+				log.Fatal(err)
+			}
+			pngdat := c.PNG()
+			if true {
+				os.WriteFile(qrname, pngdat, 0666)
+			}
 			utils.OpenFile(qrname)
 
 		}
@@ -109,7 +111,7 @@ func makeBasicControlsPage() ui.Control {
 	vsHbox := ui.NewHorizontalBox()
 	vsHbox.SetPadded(true)
 
-	vsToggleGroup := ui.NewGroup("开启或关闭vs代理")
+	vsToggleGroup := ui.NewGroup("verysimple")
 	vsToggleGroup.SetMargined(true)
 
 	{
@@ -119,8 +121,6 @@ func makeBasicControlsPage() ui.Control {
 		vsToggleGroup.SetChild(vsVbox)
 		vsHbox.Append(vsToggleGroup, true)
 		vbox.Append(vsHbox, true)
-
-		//vbox.Append(ui.NewLabel("开启或关闭vs代理"), false)
 
 		toggleHbox := ui.NewHorizontalBox()
 		toggleHbox.SetPadded(true)
@@ -133,6 +133,51 @@ func makeBasicControlsPage() ui.Control {
 		toggleHbox.Append(toggleCheckbox, false)
 		toggleHbox.Append(stopBtn, false)
 		toggleHbox.Append(startBtn, false)
+
+		toggleHbox.Append(ui.NewVerticalSeparator(), false)
+
+		vsVbox.Append(ui.NewHorizontalSeparator(), false)
+
+		grid := ui.NewGrid()
+		grid.SetPadded(true)
+		toggleHbox.Append(grid, false)
+
+		grid.Append(ui.NewLabel("日志等级"), 0, 0, 1, 1,
+			false, ui.AlignFill, false, ui.AlignFill)
+
+		loglvl_cbox := ui.NewCombobox()
+
+		toggleHbox.Append(ui.NewVerticalSeparator(), false)
+
+		printStateBtn := ui.NewButton("打印当前状态")
+		printStateBtn.OnClicked(func(b *ui.Button) {
+			mainM.PrintAllStateForHuman(os.Stdout)
+		})
+
+		toggleHbox.Append(printStateBtn, false)
+
+		{
+			grid.Append(loglvl_cbox,
+				1, 0, 1, 1,
+				false, ui.AlignFill, false, ui.AlignFill)
+
+			loglvl_cbox.Append("Debug")
+			loglvl_cbox.Append("Info")
+			loglvl_cbox.Append("Warn")
+			loglvl_cbox.Append("Error")
+
+			loglvl_cbox.SetSelected(utils.LogLevel)
+
+			loglvl_cbox.OnSelected(func(c *ui.Combobox) {
+				idx := loglvl_cbox.Selected()
+				if idx < 0 {
+					return
+				}
+				utils.LogLevel = idx
+				utils.InitLog("log init manually")
+			})
+
+		}
 
 		var updateState = func(btn, cbx bool) {
 			isR := mainM.IsRunning()
@@ -171,7 +216,6 @@ func makeBasicControlsPage() ui.Control {
 			select {
 			case <-tCh:
 				log.Println("Close timeout")
-				//os.Exit(-1)
 			case <-ch:
 				break
 			}
@@ -180,15 +224,12 @@ func makeBasicControlsPage() ui.Control {
 			if c.Checked() {
 				mainM.Start()
 			} else {
-				//mainM.Stop()
-
 				stopF()
 
 			}
 		})
 
 		stopBtn.OnClicked(func(b *ui.Button) {
-			//mainM.Stop()
 			stopF()
 		})
 
@@ -196,66 +237,117 @@ func makeBasicControlsPage() ui.Control {
 			mainM.Start()
 		})
 
-	}
+		{
 
-	vsFileGroup := ui.NewGroup("选择配置文件")
-	vsFileVbox := ui.NewVerticalBox()
-	vsFileGroup.SetChild(vsFileVbox)
-	vsHbox.Append(vsFileGroup, true)
+			fgrid := ui.NewGrid()
+			fgrid.SetPadded(true)
 
-	{
-		vsFileGroup.SetMargined(true)
-		vsFileVbox.SetPadded(true)
+			vsVbox.Append(fgrid, false)
 
-		grid := ui.NewGrid()
-		grid.SetPadded(true)
-		vsFileVbox.Append(grid, false)
-
-		button := ui.NewButton("选择文件")
-		entry := ui.NewEntry()
-		entry.SetReadOnly(true)
-		button.OnClicked(func(*ui.Button) {
-			filename := ui.OpenFile(mainwin)
-			if filename == "" {
-				filename = "(cancelled)"
-			}
-			entry.SetText(filename)
-
-			_, loadConfigErr := mainM.LoadConfig(filename, "", "")
-			if loadConfigErr != nil {
-				if ce := utils.CanLogErr("Gui Load Conf File Err"); ce != nil {
-					ce.Write(zap.Error(loadConfigErr))
+			button := ui.NewButton("选择配置文件")
+			confE := ui.NewEntry()
+			confE.SetReadOnly(true)
+			button.OnClicked(func(*ui.Button) {
+				filename := ui.OpenFile(mainwin)
+				notok := false
+				if filename == "" {
+					notok = true
+				} else if !utils.FileExist(filename) {
+					notok = true
 				}
-			} else {
-				mainM.SetupListenAndRoute()
-				mainM.SetupDial()
+
+				if notok {
+					return
+				}
+				confE.SetText(filename)
+
+				shouldStart := false
+				if mainM.IsRunning() {
+					mainM.Stop()
+					mainM.RemoveAllClient()
+					mainM.RemoveAllServer()
+
+					shouldStart = true
+				}
+
+				_, loadConfigErr := mainM.LoadConfig(filename, "", "")
+				if loadConfigErr != nil {
+					if ce := utils.CanLogErr("Gui Load Conf File Err"); ce != nil {
+						ce.Write(zap.Error(loadConfigErr))
+					}
+				} else {
+					lastConfFile = filename
+					mainM.SetupListenAndRoute()
+					mainM.SetupDial()
+
+					if shouldStart {
+						mainM.Start()
+					}
+
+					setupTab()
+				}
+
+			})
+
+			if lastConfFile != "" {
+				confE.SetText(lastConfFile)
+			} else if len(configFiles) == 1 {
+				confE.SetText(configFiles[0])
 			}
 
-		})
-		grid.Append(button,
-			0, 0, 1, 1,
-			false, ui.AlignFill, false, ui.AlignFill)
-		grid.Append(entry,
-			1, 0, 1, 1,
-			true, ui.AlignFill, false, ui.AlignFill)
+			fgrid.Append(button,
+				1, 0, 1, 1,
+				false, ui.AlignFill, false, ui.AlignFill)
+			fgrid.Append(confE,
+				0, 0, 1, 1,
+				true, ui.AlignFill, false, ui.AlignFill)
 
-		button = ui.NewButton("保存文件")
-		entry2 := ui.NewEntry()
-		entry2.SetReadOnly(true)
-		button.OnClicked(func(*ui.Button) {
-			filename := ui.SaveFile(mainwin)
-			if filename == "" {
-				filename = "(cancelled)"
-			}
-			entry2.SetText(filename)
-		})
-		grid.Append(button,
-			0, 1, 1, 1,
-			false, ui.AlignFill, false, ui.AlignFill)
-		grid.Append(entry2,
-			1, 1, 1, 1,
-			true, ui.AlignFill, false, ui.AlignFill)
+			button = ui.NewButton("保存配置文件")
+			saveFE := ui.NewEntry()
+			saveFE.SetReadOnly(true)
+			button.OnClicked(func(*ui.Button) {
+				filename := ui.SaveFile(mainwin)
+				saveFE.SetText(filename)
 
+				if filename == "" {
+					saveFE.SetText("(cancelled)")
+					return
+				}
+
+				vc := mainM.DumpVSConf()
+
+				bs, e := utils.GetPurgedTomlBytes(vc)
+				if e != nil {
+					if ce := utils.CanLogErr("转换格式错误"); ce != nil {
+						ce.Write(zap.Error(e))
+					}
+
+					return
+				}
+				filename += ".toml"
+				e = os.WriteFile(filename, bs, 0666)
+
+				if e != nil {
+					if ce := utils.CanLogErr("写入文件错误"); ce != nil {
+						ce.Write(zap.Error(e))
+					}
+
+					return
+				}
+
+				if ce := utils.CanLogInfo("导出成功"); ce != nil {
+					ce.Write(zap.String("filename", filename))
+				}
+
+			})
+			fgrid.Append(button,
+				1, 1, 1, 1,
+				false, ui.AlignFill, false, ui.AlignFill)
+			fgrid.Append(saveFE,
+				0, 1, 1, 1,
+				true, ui.AlignFill, false, ui.AlignFill)
+
+		}
 	}
 
 	vbox.Append(ui.NewHorizontalSeparator(), false)
@@ -268,12 +360,11 @@ func makeBasicControlsPage() ui.Control {
 		systemGroup.SetMargined(true)
 		systemHbox.SetPadded(true)
 
-		vbox.Append(systemHbox, true)
+		vbox.Append(systemHbox, false)
 
 		proxyForm := ui.NewForm()
 		proxyForm.SetPadded(true)
 		systemGroup.SetChild(proxyForm)
-		// systemProxyHbox.Append(proxyForm, true)
 
 		var newProxyToggle = func(form *ui.Form, isSocks5 bool) {
 			gp := currentUserPreference.Gui
@@ -367,89 +458,11 @@ func makeBasicControlsPage() ui.Control {
 	return vbox
 }
 
-func makeConfPage() ui.Control {
-	result := ui.NewHorizontalBox()
-	group := ui.NewGroup("Numbers")
-	group2 := ui.NewGroup("Lists")
-
-	result.Append(group, true)
-	result.Append(group2, true)
-
-	result.SetPadded(true)
-	group.SetMargined(true)
-	group2.SetMargined(true)
-
-	{
-		vbox := ui.NewVerticalBox()
-		vbox.SetPadded(true)
-		group.SetChild(vbox)
-
-		spinbox := ui.NewSpinbox(0, 100)
-		slider := ui.NewSlider(0, 100)
-		pbar := ui.NewProgressBar()
-		spinbox.OnChanged(func(*ui.Spinbox) {
-			slider.SetValue(spinbox.Value())
-			pbar.SetValue(spinbox.Value())
-		})
-		slider.OnChanged(func(*ui.Slider) {
-			spinbox.SetValue(slider.Value())
-			pbar.SetValue(slider.Value())
-		})
-		vbox.Append(spinbox, false)
-		vbox.Append(slider, false)
-		vbox.Append(pbar, false)
-
-		// ip := ui.NewProgressBar()
-		// ip.SetValue(-1)
-		// vbox.Append(ip, false)
-	}
-
-	vbox := ui.NewVerticalBox()
-	group2.SetChild(vbox)
-
-	vbox.SetPadded(true)
-
-	hbox2 := ui.NewHorizontalBox()
-	vbox.Append(hbox2, false)
-
-	hbox2.Append(ui.NewLabel("Listen"), false)
-
-	cbox := ui.NewCombobox()
-
-	hbox2.Append(cbox, true)
-
-	// cbox.Append("Combobox Item 1")
-	// cbox.Append("Combobox Item 2")
-	// cbox.Append("Combobox Item 3")
-
-	hbox2 = ui.NewHorizontalBox()
-	vbox.Append(hbox2, false)
-
-	hbox2.Append(ui.NewLabel("Dial"), false)
-
-	cbox = ui.NewCombobox()
-
-	hbox2.Append(cbox, true)
-
-	ecbox := ui.NewEditableCombobox()
-	vbox.Append(ecbox, false)
-
-	ecbox.Append("Editable Item 1")
-	ecbox.Append("Editable Item 2")
-	ecbox.Append("Editable Item 3")
-
-	rb := ui.NewRadioButtons()
-	rb.Append("Radio Button 1")
-	rb.Append("Radio Button 2")
-	rb.Append("Radio Button 3")
-	vbox.Append(rb, false)
-
-	return result
-}
-
 func windowClose(*ui.Window) bool {
 	return true
 }
+
+var tab *ui.Tab
 
 func setupUI() {
 
@@ -469,19 +482,31 @@ func setupUI() {
 		})
 	}
 
-	tab := ui.NewTab()
+	setupTab()
+
+	mainwin.Show()
+
+}
+
+func setupTab() {
+	if tab != nil {
+		mainwin.SetChild(nil)
+		c := tab.NumPages()
+		for i := 0; i < c; i++ {
+			tab.Delete(0)
+		}
+	}
+	tab = ui.NewTab()
 	mainwin.SetChild(tab)
 	mainwin.SetMargined(true)
 
 	tab.Append("基础控制", makeBasicControlsPage())
-	tab.Append("配置控制", makeConfPage())
-	//tab.Append("Data Choosers", makeDataChoosersPage())
+	tab.Append("代理控制", makeConfPage())
+	tab.Append("app控制", makeAppPage())
 
 	for i := 0; i < tab.NumPages(); i++ {
 		tab.SetMargined(i, true)
 	}
-	mainwin.Show()
-
 }
 
 type imgTableH struct {

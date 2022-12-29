@@ -17,7 +17,7 @@ import (
 // VS 标准toml文件格式 由 proxy.StandardConf , ApiServerConf, AppConf 3部分组成
 type VSConf struct {
 	AppConf       *AppConf       `toml:"app"`
-	ApiServerConf *ApiServerConf `toml:"api_server"`
+	ApiServerConf *ApiServerConf `toml:"apiServer"`
 	proxy.StandardConf
 }
 
@@ -30,10 +30,10 @@ type AppConf struct {
 
 	NoReadV bool `toml:"noreadv"`
 
-	UDP_timeout *int `toml:"udp_timeout"`
+	UDP_timeout *int `toml:"udp_timeout"` //分钟
 
-	DialTimeoutSeconds *int `toml:"dial_timeout"`
-	ReadTimeoutSeconds *int `toml:"read_timeout"`
+	DialTimeoutSeconds *int `toml:"dial_timeout"` //秒
+	ReadTimeoutSeconds *int `toml:"read_timeout"` //秒
 
 	GeoipFile     *string `toml:"geoip_file"`
 	GeositeFolder *string `toml:"geosite_folder"`
@@ -129,7 +129,6 @@ func (ac *AppConf) Setup() {
 }
 
 func (m *M) LoadConfigByTomlBytes(bs []byte) (err error) {
-	//var ac *AppConf
 	var vsConf VSConf
 	vsConf, err = LoadVSConfFromBs(bs)
 
@@ -145,13 +144,13 @@ func (m *M) LoadConfigByTomlBytes(bs []byte) (err error) {
 		m.AppConf.Setup()
 	}
 	if vsConf.ApiServerConf != nil {
-		m.ApiServerConf = *vsConf.ApiServerConf
+		m.tomlApiServerConf = *vsConf.ApiServerConf
 	}
 
 	return nil
 }
 
-// 先检查configFileName是否存在，存在就尝试加载文件到 standardConf , 否则尝试通过 listenURL, dialURL 参数 创建urlConf
+// 先检查configFileName是否存在，存在就尝试加载文件到 standardConf , 否则尝试通过 listenURL, dialURL 参数 创建urlConf. 若使用url, 自动加载进机器; 若为toml, 需要手动调用 SetupListenAndRoute 和 SetupDial
 func (m *M) LoadConfig(configFileName, listenURL, dialURL string) (confMode int, err error) {
 
 	fpath := utils.GetFilePath(configFileName)
@@ -218,7 +217,7 @@ func (m *M) SetupListenAndRoute() {
 		m.ParseFallbacksAtSymbol(m.standardConf.Fallbacks)
 	}
 
-	m.RoutingEnv = proxy.LoadEnvFromStandardConf(&m.standardConf, myCountryISO_3166)
+	m.routingEnv = proxy.LoadEnvFromStandardConf(&m.standardConf, myCountryISO_3166)
 
 }
 func (m *M) SetupDial() {

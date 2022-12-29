@@ -30,7 +30,7 @@ func (ServerCreator) NewServer(lc *proxy.ListenConf) (proxy.Server, error) {
 		lc.Network = netLayer.DualNetworkName
 	}
 
-	uuidStr := lc.Uuid
+	uuidStr := lc.UUID
 
 	var mp MethodPass
 	if mp.InitWithStr(uuidStr) {
@@ -50,7 +50,7 @@ func (ServerCreator) URLToListenConf(u *url.URL, lc *proxy.ListenConf, format in
 	}
 
 	if p, set := u.User.Password(); set {
-		lc.Uuid = "method:" + u.User.Username() + "\npass:" + p
+		lc.UUID = "method:" + u.User.Username() + "\npass:" + p
 	}
 
 	return lc, nil
@@ -67,6 +67,7 @@ func (ServerCreator) AfterCommonConfServer(ps proxy.Server) (err error) {
 	return
 }
 
+// 目前的实现只支持单用户
 type Server struct {
 	proxy.Base
 
@@ -76,12 +77,15 @@ type Server struct {
 
 	m             sync.RWMutex
 	udpMsgConnMap map[netLayer.HashableAddr]*serverMsgConn
+
+	mp MethodPass
 }
 
 func newServer(info MethodPass, lc *proxy.ListenConf) *Server {
 	s := &Server{
 		cipher:        initShadowCipher(info),
 		udpMsgConnMap: make(map[netLayer.HashableAddr]*serverMsgConn),
+		mp:            info,
 	}
 
 	return s
@@ -114,11 +118,11 @@ func (s *Server) SelfListen() (is bool, _, udp int) {
 	return
 }
 
-func (s *Server) Handshake(underlay net.Conn) (result net.Conn, msgConn netLayer.MsgConn, targetAddr netLayer.Addr, returnErr error) {
-	result = s.cipher.StreamConn(underlay)
+func (s *Server) Handshake(underlay net.Conn) (result net.Conn, _ netLayer.MsgConn, targetAddr netLayer.Addr, returnErr error) {
+	stream := s.cipher.StreamConn(underlay)
 	readbs := utils.GetBytes(utils.MTU)
 
-	wholeReadLen, err := result.Read(readbs)
+	wholeReadLen, err := stream.Read(readbs)
 	if err != nil {
 		returnErr = utils.ErrInErr{ErrDesc: "read underlay failed", ErrDetail: err, Data: wholeReadLen}
 		return
@@ -144,13 +148,13 @@ realPart:
 		goto errorPart
 	}
 
-	result = &netLayer.IOWrapper{
-		Reader: &utils.ReadWrapper{
-			Reader:            result,
-			OptionalReader:    io.MultiReader(readbuf, result),
+	result = &proxy.UserReadWrapper{
+		ReadWrapper: netLayer.ReadWrapper{
+			Conn:              stream,
+			OptionalReader:    io.MultiReader(readbuf, stream),
 			RemainFirstBufLen: readbuf.Len(),
 		},
-		Writer: result,
+		User: s.mp,
 	}
 
 	return
@@ -204,6 +208,7 @@ func (s *Server) StartListen(_ func(netLayer.TCPRequestInfo), udpFunc func(netLa
 					closeChan:     make(chan struct{}),
 					server:        s,
 					hash:          hash,
+					User:          s.mp,
 				}
 				conn.InitEasyDeadline()
 

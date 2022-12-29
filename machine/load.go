@@ -14,14 +14,14 @@ func (m *M) LoadDialConf(conf []*proxy.DialConf) (ok bool) {
 
 	for _, d := range conf {
 
-		if d.Uuid == "" && m.DefaultUUID != "" {
-			d.Uuid = m.DefaultUUID
+		if d.UUID == "" && m.DefaultUUID != "" {
+			d.UUID = m.DefaultUUID
 		}
 
 		outClient, err := proxy.NewClient(d)
 		if err != nil {
 			if ce := utils.CanLogErr("can not create outClient: "); ce != nil {
-				ce.Write(zap.Error(err))
+				ce.Write(zap.Error(err), zap.Any("raw", d))
 			}
 			ok = false
 			continue
@@ -30,7 +30,7 @@ func (m *M) LoadDialConf(conf []*proxy.DialConf) (ok bool) {
 		m.allClients = append(m.allClients, outClient)
 		if tag := outClient.GetTag(); tag != "" {
 
-			m.RoutingEnv.SetClient(tag, outClient)
+			m.routingEnv.SetClient(tag, outClient)
 
 		}
 	}
@@ -54,22 +54,22 @@ func (m *M) LoadListenConf(conf []*proxy.ListenConf, hot bool) (ok bool) {
 	}
 
 	for _, l := range conf {
-		if l.Uuid == "" && m.DefaultUUID != "" {
-			l.Uuid = m.DefaultUUID
+		if l.UUID == "" && m.DefaultUUID != "" {
+			l.UUID = m.DefaultUUID
 		}
 
 		inServer, err := proxy.NewServer(l)
 		if err != nil {
 
 			if ce := utils.CanLogErr("Can not create listen server"); ce != nil {
-				ce.Write(zap.Error(err))
+				ce.Write(zap.Error(err), zap.Any("raw", l))
 			}
 			ok = false
 			continue
 		}
 
 		if hot {
-			lis := v2ray_simple.ListenSer(inServer, m.DefaultOutClient, &m.RoutingEnv, &m.GlobalInfo)
+			lis := v2ray_simple.ListenSer(inServer, m.DefaultOutClient, &m.routingEnv, &m.GlobalInfo)
 			if lis != nil {
 				m.listenCloserList = append(m.listenCloserList, lis)
 				m.allServers = append(m.allServers, inServer)
@@ -85,14 +85,31 @@ func (m *M) LoadListenConf(conf []*proxy.ListenConf, hot bool) (ok bool) {
 	return
 }
 
+func (m *M) RemoveAllClient() {
+	count := m.ClientCount()
+
+	for i := 0; i < count; i++ {
+		m.HotDeleteClient(0)
+	}
+}
+
+func (m *M) RemoveAllServer() {
+	count := m.ServerCount()
+
+	for i := 0; i < count; i++ {
+		m.HotDeleteServer(0)
+	}
+}
+
 // delete and stop the client
 func (m *M) HotDeleteClient(index int) {
 	if index < 0 || index >= len(m.allClients) {
 		return
 	}
+
 	doomedClient := m.allClients[index]
 
-	m.RoutingEnv.DelClient(doomedClient.GetTag())
+	m.routingEnv.DelClient(doomedClient.GetTag())
 	doomedClient.Stop()
 	m.allClients = utils.TrimSlice(m.allClients, index)
 }
@@ -123,7 +140,7 @@ func (m *M) loadUrlConf(hot bool) (result int) {
 	}
 
 	if hot {
-		lis := v2ray_simple.ListenSer(ser, cli, &m.RoutingEnv, &m.GlobalInfo)
+		lis := v2ray_simple.ListenSer(ser, cli, &m.routingEnv, &m.GlobalInfo)
 		if lis != nil {
 			m.listenCloserList = append(m.listenCloserList, lis)
 		} else {
@@ -168,27 +185,37 @@ func (m *M) loadUrlClient(urlConf proxy.UrlConf) (result int, client proxy.Clien
 	return
 }
 
-func (m *M) GetStandardConfFromCurrentState() (sc proxy.StandardConf) {
+// 从当前内存中的配置 导出 VSConf
+func (m *M) DumpVSConf() (vc VSConf) {
+	vc.StandardConf = m.DumpStandardConf()
+	vc.ApiServerConf = &m.ApiServerConf
+	vc.AppConf = &m.AppConf
+
+	return
+}
+
+// 从当前内存中的配置 导出 proxy.StandardConf
+func (m *M) DumpStandardConf() (sc proxy.StandardConf) {
 	for i := range m.allClients {
-		sc.Dial = append(sc.Dial, m.getDialConfFromCurrentState(i))
+		sc.Dial = append(sc.Dial, m.dumpDialConf(i))
 
 	}
 	for i := range m.allServers {
-		sc.Listen = append(sc.Listen, m.getListenConfFromCurrentState(i))
+		sc.Listen = append(sc.Listen, m.dumpListenConf(i))
 
 	}
 
 	return
 }
 
-func (m *M) getDialConfFromCurrentState(i int) (dc *proxy.DialConf) {
+func (m *M) dumpDialConf(i int) (dc *proxy.DialConf) {
 	c := m.allClients[i]
 	dc = c.GetBase().DialConf
 
 	return
 }
 
-func (m *M) getListenConfFromCurrentState(i int) (lc *proxy.ListenConf) {
+func (m *M) dumpListenConf(i int) (lc *proxy.ListenConf) {
 	c := m.allServers[i]
 	lc = c.GetBase().ListenConf
 
