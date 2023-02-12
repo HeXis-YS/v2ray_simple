@@ -27,7 +27,7 @@ func getShadowTlsPasswordFromExtra(extra map[string]any) string {
 	return ""
 }
 
-// 转发并判断tls1握手结束后直接返回
+// 转发并判断tls1.2握手结束后直接返回
 func shadowTls1(servername string, clientConn net.Conn) (err error) {
 	var fakeConn net.Conn
 	fakeConn, err = net.Dial("tcp", servername+":443")
@@ -66,10 +66,13 @@ func shadowTls1(servername string, clientConn net.Conn) (err error) {
 	<-finish1
 
 	if e1 != nil || e2 != nil {
-		e := utils.Errs{List: []utils.ErrsItem{
-			{Index: 1, E: e1},
-			{Index: 2, E: e2},
-		}}
+		e := utils.ErrList{}
+		if e1 != nil {
+			e.Add(utils.ErrItem{Index: 1, E: e1})
+		}
+		if e2 != nil {
+			e.Add(utils.ErrItem{Index: 2, E: e2})
+		}
 
 		return e
 	}
@@ -81,8 +84,7 @@ func shadowTls1(servername string, clientConn net.Conn) (err error) {
 	return
 }
 
-// 握手成功后返回 *FakeAppDataConn
-func shadowTls2(servername string, clientConn net.Conn, password string) (result net.Conn, err error) {
+func shadowTls2(servername string, clientConn net.Conn, password string) (result *FakeAppDataConn, err error) {
 	var fakeConn net.Conn
 	fakeConn, err = net.Dial("tcp", servername+":443")
 	if err != nil {
@@ -96,7 +98,9 @@ func shadowTls2(servername string, clientConn net.Conn, password string) (result
 	}
 
 	hashW := utils.NewHashWriter(clientConn, []byte(password))
-	go io.Copy(hashW, fakeConn)
+
+	go io.Copy(hashW, fakeConn) //write real server response back to client
+
 	var firstPayload *bytes.Buffer
 	firstPayload, err = shadowCopyHandshakeClientToFake(fakeConn, clientConn, hashW)
 
@@ -121,8 +125,9 @@ func shadowTls2(servername string, clientConn net.Conn, password string) (result
 		}
 
 		hashW.StopHashing()
-		go io.Copy(fakeConn, clientConn)
-		return nil, errors.New("not real shadowTlsClient, fallback")
+		go io.Copy(fakeConn, clientConn) //write client request to real server
+
+		return nil, utils.ErrInErr{ErrDetail: netLayer.ErrDoNotClose, ErrDesc: "not real shadowTlsClient, fallback"}
 	}
 	return nil, err
 

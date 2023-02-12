@@ -23,9 +23,7 @@ import (
 var (
 	download bool
 
-	//defaultApiServerConf machine.ApiServerConf
-
-	extra_preCommands []func()
+	preCommands []func()
 
 	exitCmds = []exitCmd{
 		{name: "sp", desc: "print supported protocols", f: printSupportedProtocols},
@@ -44,12 +42,7 @@ type exitCmd struct {
 }
 
 func init() {
-
 	flag.BoolVar(&download, "d", false, " automatically download required mmdb file")
-
-	//apiServer stuff
-
-	//defaultApiServerConf.SetupFlags()
 }
 
 func initExitCmds() {
@@ -62,7 +55,6 @@ func initExitCmds() {
 
 		}
 	}
-
 }
 
 // 运行一些 执行后立即退出程序的 命令
@@ -89,16 +81,17 @@ func runExitCommands() (atLeastOneCalled bool) {
 	return
 }
 
+// 运行 一些 在 加载配置文件前 执行的 命令
 func runPreCommands() {
-	if len(extra_preCommands) > 0 {
-		for _, f := range extra_preCommands {
+	if len(preCommands) > 0 {
+		for _, f := range preCommands {
 			f()
 		}
 	}
 
 }
 
-// 在开始正式代理前, 先运行一些需要运行的命令与函数
+// 运行一些 在 加载配置文件后 、开始正式代理前 执行的 命令
 func runPreCommandsAfterLoadConf() {
 
 	if download {
@@ -110,7 +103,9 @@ func runPreCommandsAfterLoadConf() {
 }
 
 func generateAndPrintUUID() {
-	fmt.Printf("New random uuid : %s\n", utils.GenerateUUIDStr())
+	utils.PrintStr("New random uuid : ")
+	utils.PrintStr(utils.GenerateUUIDStr())
+	utils.PrintStr("\n")
 }
 
 func generateRandomSSlCert() {

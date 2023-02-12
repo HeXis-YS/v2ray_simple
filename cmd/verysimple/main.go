@@ -34,7 +34,6 @@ func (i *confFileArrayFlags) Set(value string) error {
 }
 
 var (
-	//configFileName string
 	configFiles confFileArrayFlags
 
 	useNativeUrlFormat bool
@@ -66,9 +65,11 @@ const (
 func init() {
 	mainM = machine.New()
 
+	flag.Var(&configFiles, "c", "config files; mutiple files are possible, but must all be toml files, like -c c1.toml -c c2.toml")
+
 	flag.IntVar(&utils.LogLevel, "ll", utils.DefaultLL, "log level,0=debug, 1=info, 2=warning, 3=error, 4=dpanic, 5=panic, 6=fatal")
 
-	flag.IntVar(&utils.LogLevelForFile, "llf", -1, "log level for log file,if negative, it will be the same as ll. 0=debug, 1=info, 2=warning, 3=error, 4=dpanic, 5=panic, 6=fatal")
+	flag.IntVar(&utils.LogLevelForFile, "llf", -1, "log level for log file,if negative, it will be the same as ll.")
 
 	//有时发现在某些情况下，dns查询或者tcp链接的建立很慢，甚至超过8秒, 所以开放自定义超时时间，便于在不同环境下测试
 	flag.IntVar(&dialTimeoutSecond, "dt", int(netLayer.DefaultDialTimeout/time.Second), "dial timeout, in second")
@@ -90,8 +91,6 @@ func init() {
 	flag.StringVar(&netLayer.GeoipFileName, "geoip", defaultGeoipFn, "geoip maxmind file name (relative or absolute path)")
 	flag.StringVar(&netLayer.GeositeFolder, "geosite", netLayer.DefaultGeositeFolder, "geosite folder name (set it to the relative or absolute path of your geosite/data folder)")
 	flag.StringVar(&utils.ExtraSearchPath, "path", "", "search path for mmdb, geosite and other required files")
-
-	flag.Var(&configFiles, "c", "config files; mutiple files are possible, but must all be toml files, like -c c1.toml -c c2.toml")
 
 }
 
@@ -149,11 +148,14 @@ func mainFunc() (result int) {
 
 	var configFileName string
 
-	if len(configFiles) == 1 {
+	switch len(configFiles) {
+	case 0:
+		configFileName = defaultConfFn
+
+	case 1:
 		configFileName = configFiles[0]
 
-	} else if len(configFiles) > 1 {
-
+	default:
 		tomlBuf = utils.GetBuf()
 
 		for _, fn := range configFiles {
@@ -224,8 +226,6 @@ func mainFunc() (result int) {
 		ce.Write(zap.Any("flags", utils.GivenFlagKVs()))
 	}
 
-	mainM.SetupApiConf()
-
 	if loadConfigErr != nil && !IsFlexible(mainM) {
 
 		if ce := utils.CanLogErr(willExitStr); ce != nil {
@@ -277,10 +277,6 @@ func mainFunc() (result int) {
 	}()
 
 	mainM.Start()
-
-	// if defaultApiServerConf.EnableApiServer {
-	// 	mainM.ApiServerConf = defaultApiServerConf
-	// }
 
 	//没可用的listen/dial，而且还无法动态更改配置
 	if NoFuture(mainM) {
@@ -339,12 +335,14 @@ func stopMachineAndExit(m *machine.M) {
 
 }
 
+// print close info and call stopMachineAndExit
 func exitBySignal() {
 	utils.Info("Program got close signal.")
 
 	stopMachineAndExit(mainM)
 }
 
+// splice, pprof, urlFormat, dialtimeout
 func setupSystemParemeters() {
 	if disableSplice {
 		netLayer.SystemCanSplice = false

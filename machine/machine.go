@@ -1,9 +1,7 @@
 /*
-Package machine 定义一个 可以直接运行的有限状态机；这个机器可以直接被可执行文件或者动态库所使用.
+Package machine 包装运行代理所需的方法，被设计为可轻易被外部程序或库调用, 而无需理解其内部细节
 
-machine把所有运行代理所需要的代码包装起来，对外像一个黑盒子。
-
-关键点是不使用任何静态变量，所有变量都放在machine中。
+一般而言，本包被命名为 engine 可能更恰当. 不过无所谓
 */
 package machine
 
@@ -18,6 +16,7 @@ import (
 	"github.com/dustin/go-humanize"
 	"github.com/e1732a364fed/v2ray_simple"
 	"github.com/e1732a364fed/v2ray_simple/httpLayer"
+	"github.com/e1732a364fed/v2ray_simple/netLayer"
 	"github.com/e1732a364fed/v2ray_simple/proxy"
 	"github.com/e1732a364fed/v2ray_simple/utils"
 	"go.uber.org/zap"
@@ -50,7 +49,8 @@ type M struct {
 
 	callbacks
 
-	stateReportTicker *time.Ticker
+	enablePeriodicallyReportState bool
+	stateReportTicker             *time.Ticker
 }
 
 func New() *M {
@@ -108,20 +108,23 @@ func (m *M) Start() {
 			dm.StartListen()
 		}
 
-		if m.stateReportTicker == nil {
-			m.stateReportTicker = time.NewTicker(time.Minute * 5) //每隔五分钟输出一次目前状态
+		if m.enablePeriodicallyReportState {
+			if m.stateReportTicker == nil {
+				m.stateReportTicker = time.NewTicker(time.Minute * 5) //每隔五分钟输出一次目前状态
 
-			var sw = utils.PrefixWriter{
-				Writer: os.Stdout,
-			}
-			go func() {
-				for range m.stateReportTicker.C {
-					sw.Prefix = []byte(time.Now().Format("2006-01-02 15:04:05.999 "))
-					sw.Write([]byte("Current state:\n"))
-					m.PrintAllStateForHuman(&sw)
+				var sw = utils.PrefixWriter{
+					Writer: os.Stdout,
 				}
-			}()
+				go func() {
+					for range m.stateReportTicker.C {
+						sw.Prefix = []byte(time.Now().Format("2006-01-02 15:04:05.999 "))
+						sw.Write([]byte("Current state:\n"))
+						m.PrintAllStateForHuman(os.Stdout, false)
+					}
+				}()
+			}
 		}
+
 		m.Unlock()
 	}
 
@@ -131,8 +134,8 @@ func (m *M) Start() {
 
 }
 
-// 融合 CmdApiServerConf 和 TomlApiServerConf, CmdApiServerConf 的值会覆盖 TomlApiServerConf
-func (m *M) SetupApiConf() {
+// 融合 CmdApiServerConf 和 tomlApiServerConf, CmdApiServerConf 的值会覆盖 tomlApiServerConf
+func (m *M) setupApiConf() {
 	m.ApiServerConf = NewApiServerConf()
 
 	m.ApiServerConf.SetNonDefault(&m.tomlApiServerConf)
@@ -167,7 +170,7 @@ func (m *M) Stop() {
 	m.Unlock()
 }
 
-func (m *M) SetDefaultDirectClient() {
+func (m *M) setDefaultDirectClient() {
 	m.allClients = append(m.allClients, v2ray_simple.DirectClient)
 	m.DefaultOutClient = v2ray_simple.DirectClient
 
@@ -175,7 +178,7 @@ func (m *M) SetDefaultDirectClient() {
 }
 
 // 将fallback配置中的@转化成实际对应的server的地址
-func (m *M) ParseFallbacksAtSymbol(fs []*httpLayer.FallbackConf) {
+func (m *M) parseFallbacksAtSymbol(fs []*httpLayer.FallbackConf) {
 	for _, fbConf := range fs {
 		if fbConf.Dest == nil {
 			continue
@@ -200,7 +203,7 @@ func (m *M) HasProxyRunning() bool {
 	return len(m.listenCloserList) > 0
 }
 
-func (m *M) printAllState_2(w io.Writer) {
+func (m *M) printState_proxy(w io.Writer) {
 	for i, s := range m.allServers {
 		fmt.Fprintln(w, "inServer", i, proxy.GetVSI_url(s, ""))
 
@@ -210,7 +213,20 @@ func (m *M) printAllState_2(w io.Writer) {
 	}
 }
 
-func (m *M) PrintAllState(w io.Writer) {
+func (m *M) printState_routePolicy(w io.Writer) {
+	if rp := m.routingEnv.RoutePolicy; rp != nil {
+		for i, v := range rp.List {
+			fmt.Fprintln(w, "route", i, v)
+		}
+	}
+}
+
+// 用于gomobile等无法接受复杂参数的情况
+func (m *M) EasyPrintState() {
+	m.PrintAllState(os.Stdout, true)
+}
+
+func (m *M) PrintAllState(w io.Writer, printRouteEnv bool) {
 	if w == nil {
 		w = os.Stdout
 	}
@@ -218,11 +234,15 @@ func (m *M) PrintAllState(w io.Writer) {
 	fmt.Fprintln(w, "allDownloadBytesSinceStart", m.AllDownloadBytesSinceStart)
 	fmt.Fprintln(w, "allUploadBytesSinceStart", m.AllUploadBytesSinceStart)
 
-	m.printAllState_2(w)
+	m.printState_proxy(w)
+	if printRouteEnv {
+		m.printState_routePolicy(w)
+
+	}
 }
 
 // mimic PrintAllState
-func (m *M) PrintAllStateForHuman(w io.Writer) {
+func (m *M) PrintAllStateForHuman(w io.Writer, printRouteEnv bool) {
 	if w == nil {
 		w = os.Stdout
 	}
@@ -230,6 +250,18 @@ func (m *M) PrintAllStateForHuman(w io.Writer) {
 	fmt.Fprintln(w, "allDownloadBytesSinceStart", humanize.Bytes(m.AllDownloadBytesSinceStart))
 	fmt.Fprintln(w, "allUploadBytesSinceStart", humanize.Bytes(m.AllUploadBytesSinceStart))
 
-	m.printAllState_2(w)
+	m.printState_proxy(w)
+	if printRouteEnv {
+		m.printState_routePolicy(w)
 
+	}
+
+}
+
+func (m *M) GetRoutePolicy() *netLayer.RoutePolicy {
+	return m.routingEnv.RoutePolicy
+}
+
+func (m *M) SetRoutePolicy(rp *netLayer.RoutePolicy) {
+	m.routingEnv.RoutePolicy = rp
 }

@@ -17,7 +17,6 @@ import (
 	"github.com/e1732a364fed/v2ray_simple/netLayer"
 	"github.com/e1732a364fed/v2ray_simple/utils"
 	"go.uber.org/zap"
-	"rsc.io/qr"
 )
 
 var (
@@ -53,18 +52,6 @@ func init() {
 				entriesGroup.Show()
 				multilineEntry.SetText(strings.Join(strs, "\n"))
 			}
-
-			const qrname = "vs_qrcode.png"
-
-			c, err := qr.Encode("https://example.org", qr.L)
-			if err != nil {
-				log.Fatal(err)
-			}
-			pngdat := c.PNG()
-			if true {
-				os.WriteFile(qrname, pngdat, 0666)
-			}
-			utils.OpenFile(qrname)
 
 		}
 
@@ -102,6 +89,55 @@ func setupDefaultPref() {
 		gp.Socks5Port = "10800"
 	}
 
+}
+
+var tab *ui.Tab
+
+func setupUI() {
+
+	setMenu()
+
+	mainwin = ui.NewWindow("verysimple", 640, 480, true) //must create after menu; or it will panic
+
+	{
+		mainwin.OnClosing(func(*ui.Window) bool {
+			ui.Quit() //只是退出gui模式，不会退出app
+			mainwin = nil
+			return true
+		})
+		ui.OnShouldQuit(func() bool {
+			mainwin = nil
+			return true
+		})
+	}
+
+	setupTab()
+
+	mainwin.Show()
+
+}
+
+func setupTab() {
+	if tab != nil {
+		mainwin.SetChild(nil)
+		c := tab.NumPages()
+		for i := 0; i < c; i++ {
+			tab.Delete(0)
+		}
+	}
+	tab = ui.NewTab()
+	mainwin.SetChild(tab)
+	mainwin.SetMargined(true)
+
+	tab.Append("基础控制", makeBasicControlsPage())
+	tab.Append("代理控制", makeConfPage())
+	tab.Append("路由控制", makeRoutePage())
+	tab.Append("app控制", makeAppPage())
+	tab.Append("log查看器", makeLogPage())
+
+	//for i := 0; i < tab.NumPages(); i++ {
+	//tab.SetMargined(i, true)
+	//}
 }
 
 func makeBasicControlsPage() ui.Control {
@@ -151,7 +187,7 @@ func makeBasicControlsPage() ui.Control {
 
 		printStateBtn := ui.NewButton("打印当前状态")
 		printStateBtn.OnClicked(func(b *ui.Button) {
-			mainM.PrintAllStateForHuman(os.Stdout)
+			mainM.PrintAllStateForHuman(os.Stdout, false)
 		})
 
 		toggleHbox.Append(printStateBtn, false)
@@ -277,6 +313,8 @@ func makeBasicControlsPage() ui.Control {
 					}
 				} else {
 					lastConfFile = filename
+					mainM.RemoveAllClient()
+					mainM.RemoveAllServer()
 					mainM.SetupListenAndRoute()
 					mainM.SetupDial()
 
@@ -458,57 +496,7 @@ func makeBasicControlsPage() ui.Control {
 	return vbox
 }
 
-func windowClose(*ui.Window) bool {
-	return true
-}
-
-var tab *ui.Tab
-
-func setupUI() {
-
-	setMenu()
-
-	mainwin = ui.NewWindow("verysimple", 640, 480, true) //must create after menu; or it will panic
-
-	{
-		mainwin.OnClosing(func(*ui.Window) bool {
-			ui.Quit() //只是退出gui模式，不会退出app
-			mainwin = nil
-			return true
-		})
-		ui.OnShouldQuit(func() bool {
-			mainwin = nil
-			return true
-		})
-	}
-
-	setupTab()
-
-	mainwin.Show()
-
-}
-
-func setupTab() {
-	if tab != nil {
-		mainwin.SetChild(nil)
-		c := tab.NumPages()
-		for i := 0; i < c; i++ {
-			tab.Delete(0)
-		}
-	}
-	tab = ui.NewTab()
-	mainwin.SetChild(tab)
-	mainwin.SetMargined(true)
-
-	tab.Append("基础控制", makeBasicControlsPage())
-	tab.Append("代理控制", makeConfPage())
-	tab.Append("app控制", makeAppPage())
-
-	for i := 0; i < tab.NumPages(); i++ {
-		tab.SetMargined(i, true)
-	}
-}
-
+/*
 type imgTableH struct {
 	img *ui.Image
 }
@@ -539,3 +527,4 @@ func (mh *imgTableH) CellValue(m *ui.TableModel, row, column int) ui.TableValue 
 func (mh *imgTableH) SetCellValue(m *ui.TableModel, row, column int, value ui.TableValue) {
 
 }
+*/

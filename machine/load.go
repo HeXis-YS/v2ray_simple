@@ -3,6 +3,7 @@ package machine
 import (
 	"fmt"
 
+	"github.com/BurntSushi/toml"
 	"github.com/e1732a364fed/v2ray_simple"
 	"github.com/e1732a364fed/v2ray_simple/proxy"
 	"github.com/e1732a364fed/v2ray_simple/utils"
@@ -29,7 +30,7 @@ func (m *M) LoadDialConf(conf []*proxy.DialConf) (ok bool) {
 
 		m.allClients = append(m.allClients, outClient)
 		if tag := outClient.GetTag(); tag != "" {
-
+			m.tryInitEnv()
 			m.routingEnv.SetClient(tag, outClient)
 
 		}
@@ -45,13 +46,18 @@ func (m *M) LoadDialConf(conf []*proxy.DialConf) (ok bool) {
 
 }
 
-// add; when hot=true, listen the server
+// 试图通过 conf数组创建server，并保存到m中。若 hot = false, 如果有任何一个server创建出错，则不会有任何server被保存入m。
+// 若 hot=true, 监听每一个成功创建的server. hot = true只有在 m.IsRunning() 时有效，否则视为 false
 func (m *M) LoadListenConf(conf []*proxy.ListenConf, hot bool) (ok bool) {
 	ok = true
 
 	if m.DefaultOutClient == nil {
 		m.DefaultOutClient = v2ray_simple.DirectClient
 	}
+
+	var tmplist []proxy.Server
+
+	h_r := hot && m.running
 
 	for _, l := range conf {
 		if l.UUID == "" && m.DefaultUUID != "" {
@@ -68,7 +74,7 @@ func (m *M) LoadListenConf(conf []*proxy.ListenConf, hot bool) (ok bool) {
 			continue
 		}
 
-		if hot {
+		if h_r {
 			lis := v2ray_simple.ListenSer(inServer, m.DefaultOutClient, &m.routingEnv, &m.GlobalInfo)
 			if lis != nil {
 				m.listenCloserList = append(m.listenCloserList, lis)
@@ -78,8 +84,13 @@ func (m *M) LoadListenConf(conf []*proxy.ListenConf, hot bool) (ok bool) {
 				ok = false
 			}
 		} else {
-			m.allServers = append(m.allServers, inServer)
+			tmplist = append(tmplist, inServer)
+
 		}
+	}
+
+	if ok && !h_r {
+		m.allServers = append(m.allServers, tmplist...)
 	}
 
 	return
@@ -116,15 +127,23 @@ func (m *M) HotDeleteClient(index int) {
 
 // delete and close the server
 func (m *M) HotDeleteServer(index int) {
-	if index < 0 || index >= len(m.listenCloserList) {
+	if index < 0 || index >= len(m.allServers) {
 		return
 	}
+	running := m.IsRunning()
+	if running {
+		if index >= len(m.listenCloserList) {
+			return
+		}
+	}
 
-	m.listenCloserList[index].Close()
 	m.allServers[index].Stop()
-
 	m.allServers = utils.TrimSlice(m.allServers, index)
-	m.listenCloserList = utils.TrimSlice(m.listenCloserList, index)
+
+	if running {
+		m.listenCloserList[index].Close()
+		m.listenCloserList = utils.TrimSlice(m.listenCloserList, index)
+	}
 }
 
 func (m *M) loadUrlConf(hot bool) (result int) {
@@ -197,27 +216,29 @@ func (m *M) DumpVSConf() (vc VSConf) {
 // 从当前内存中的配置 导出 proxy.StandardConf
 func (m *M) DumpStandardConf() (sc proxy.StandardConf) {
 	for i := range m.allClients {
-		sc.Dial = append(sc.Dial, m.dumpDialConf(i))
+		dc := m.dumpDialConf(i)
+		sc.Dial = append(sc.Dial, &dc)
 
 	}
 	for i := range m.allServers {
-		sc.Listen = append(sc.Listen, m.dumpListenConf(i))
+		lc := m.dumpListenConf(i)
+		sc.Listen = append(sc.Listen, &lc)
 
 	}
 
 	return
 }
 
-func (m *M) dumpDialConf(i int) (dc *proxy.DialConf) {
+func (m *M) dumpDialConf(i int) (dc proxy.DialConf) {
 	c := m.allClients[i]
-	dc = c.GetBase().DialConf
+	dc = *c.GetBase().DialConf
 
 	return
 }
 
-func (m *M) dumpListenConf(i int) (lc *proxy.ListenConf) {
+func (m *M) dumpListenConf(i int) (lc proxy.ListenConf) {
 	c := m.allServers[i]
-	lc = c.GetBase().ListenConf
+	lc = *c.GetBase().ListenConf
 
 	return
 }
@@ -250,6 +271,7 @@ func (m *M) HotLoadDialUrl(theUrlStr string, format int) error {
 
 }
 
+// 热加载url格式的listen配置。format为1表示vs标准url格式, 0表示协议原生url格式，一般为1。
 func (m *M) HotLoadListenUrl(theUrlStr string, format int) error {
 	u, sn, creator, okTls, err := proxy.GetRealProtocolFromServerUrl(theUrlStr)
 	if err != nil {
@@ -276,4 +298,35 @@ func (m *M) HotLoadListenUrl(theUrlStr string, format int) error {
 		return utils.ErrFailed
 	}
 	return nil
+}
+
+// 热加载toml格式的listen配置
+func (m *M) HotLoadListenConfStr(theStr string) error {
+	bs := []byte(theStr)
+	bs = utils.ReplaceBytesSynonyms(bs, proxy.StandardConfBytesSynonyms)
+	var lc proxy.ListenConf
+	err := toml.Unmarshal(bs, &lc)
+	if err != nil {
+		return err
+	}
+	if !m.LoadListenConf([]*proxy.ListenConf{&lc}, true) {
+		return utils.ErrFailed
+	}
+	return nil
+
+}
+
+func (m *M) HotLoadDialConfStr(theStr string) error {
+	bs := []byte(theStr)
+	bs = utils.ReplaceBytesSynonyms(bs, proxy.StandardConfBytesSynonyms)
+	var lc proxy.DialConf
+	err := toml.Unmarshal(bs, &lc)
+	if err != nil {
+		return err
+	}
+	if !m.LoadDialConf([]*proxy.DialConf{&lc}) {
+		return utils.ErrFailed
+	}
+	return nil
+
 }

@@ -19,10 +19,12 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/e1732a364fed/v2ray_simple/netLayer"
 	"github.com/e1732a364fed/v2ray_simple/netLayer/tun/device"
+	"github.com/e1732a364fed/v2ray_simple/netLayer/tun/device/fdbased"
 	"github.com/e1732a364fed/v2ray_simple/netLayer/tun/device/tun"
 	"github.com/e1732a364fed/v2ray_simple/netLayer/tun/option"
 	"github.com/e1732a364fed/v2ray_simple/utils"
@@ -38,11 +40,17 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-// 若name为空则会返回错误
+// 若name为空则会返回错误. 若name可转换为数字，则会将其解析为fd 号
 func Open(name string) (device.Device, error) {
 	if name == "" {
 		return nil, errors.New("tun: dev name can't be empty")
 	}
+
+	_, err := strconv.Atoi(name)
+	if err == nil {
+		return fdbased.Open(name, uint32(utils.MTU))
+	}
+
 	return tun.Open(name, uint32(utils.MTU))
 }
 

@@ -18,6 +18,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const eIllegalParameter = "illegal parameter"
+
 /*
 curl -k https://127.0.0.1:48345/api/allstate
 */
@@ -38,6 +40,7 @@ func NewApiServerConf() (ac ApiServerConf) {
 	return
 }
 
+// if fs == nil, flag.CommandLine will be used
 func (asc *ApiServerConf) SetupFlags(fs *flag.FlagSet) {
 	if fs == nil {
 		fs = flag.CommandLine
@@ -92,8 +95,6 @@ func (m *M) TryRunApiServer() {
 
 }
 
-const eIllegalParameter = "illegal parameter"
-
 // 阻塞
 func (m *M) runApiServer() {
 
@@ -127,7 +128,7 @@ func (m *M) runApiServer() {
 	}
 
 	ser.addServerHandle(mux, "allstate", func(w http.ResponseWriter, r *http.Request) {
-		m.PrintAllState(w)
+		m.PrintAllState(w, false)
 	})
 	ser.addServerHandle(mux, "hotDelete", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -240,11 +241,11 @@ func (m *M) runApiServer() {
 			}
 			if isDial {
 				dc := m.dumpDialConf(ind)
-				url := proxy.ToStandardUrl(&dc.CommonConf, dc, nil)
+				url := proxy.ToStandardUrl(&dc.CommonConf, &dc, nil)
 				w.Write([]byte(url))
 			} else {
 				lc := m.dumpListenConf(ind)
-				url := proxy.ToStandardUrl(&lc.CommonConf, nil, lc)
+				url := proxy.ToStandardUrl(&lc.CommonConf, nil, &lc)
 				w.Write([]byte(url))
 			}
 
