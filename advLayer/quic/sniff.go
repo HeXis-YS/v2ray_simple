@@ -9,7 +9,7 @@ import (
 
 	"github.com/e1732a364fed/v2ray_simple/tlsLayer"
 	"github.com/e1732a364fed/v2ray_simple/utils"
-	"github.com/lucas-clemente/quic-go/quicvarint"
+	"github.com/quic-go/quic-go/quicvarint"
 	"github.com/marten-seemann/qtls"
 	"golang.org/x/crypto/hkdf"
 )

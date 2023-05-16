@@ -3,7 +3,7 @@ package quic
 import (
 	"time"
 
-	"github.com/lucas-clemente/quic-go/congestion"
+	"github.com/quic-go/quic-go/congestion"
 )
 
 var TheCustomRate = 0.75

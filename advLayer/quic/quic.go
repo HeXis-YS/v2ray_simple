@@ -1,6 +1,6 @@
 /*Package quic defines functions to listen and dial quic, with some customizable congestion settings.
 
-quic的包装太简单了, 直接参考 https://github.com/lucas-clemente/quic-go/blob/master/example/echo/echo.go
+quic的包装太简单了, 直接参考 https://github.com/quic-go/quic-go/blob/master/example/echo/echo.go
 
 Hysteria Brutal Congestion Control
 
@@ -15,7 +15,7 @@ Hysteria Brutal Congestion Control
 
 Imperfect Package
 
-引用的 lucas-clemente/quic-go 包 是不完美的，它对阻塞控制支持不好，而且cpu占用率高。以后有更好的包的话要及时切换到好包。
+引用的 quic-go/quic-go 包 是不完美的，它对阻塞控制支持不好，而且cpu占用率高。以后有更好的包的话要及时切换到好包。
 
 我在macm1里实测，内网单机极速测速的情况下，本来tcp的vlesss能达到3000mbps的速度，到了vless+quic就只能达到 1333mbps左右。
 
@@ -32,7 +32,7 @@ import (
 
 	"github.com/e1732a364fed/v2ray_simple/advLayer"
 	"github.com/e1732a364fed/v2ray_simple/utils"
-	"github.com/lucas-clemente/quic-go"
+	"github.com/quic-go/quic-go"
 	"go.uber.org/zap"
 )
 
